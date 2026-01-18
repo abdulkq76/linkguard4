@@ -6,9 +6,6 @@ import {
   ShieldAlert, Info, Zap
 } from 'lucide-react';
 
-// --- CONFIGURATION ---
-const apiKey = "AIzaSyB300EpegojEXHxcqmsUzD8rMLp07tShYE"; // The environment provides the key at runtime
-
 // --- COMPONENTS ---
 
 // 1. Subtle, high-end background
@@ -115,7 +112,7 @@ const App = () => {
     `;
 
     try {
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+      const response = await fetch(`https://api.bennokahmann.me/ai/google/jill/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
