@@ -76,7 +76,7 @@ const App = () => {
             POWERED BY NEURAL ANALYSIS
           </div>
           <h1 className="text-5xl md:text-6xl font-bold tracking-tight mb-4 text-white">
-            LinkGuard<span className="text-blue-500">.</span>
+            LinkGuard<span className="text-blue-500">Pro</span>
           </h1>
           <p className="text-slate-400 text-lg max-w-lg mx-auto">
             Professional link verification and threat intelligence to protect your digital identity.
