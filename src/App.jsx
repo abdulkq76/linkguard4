@@ -4,7 +4,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
 // --- CONFIGURATION ---
-const apiKey = "AIzaSyAuJk5n4LgrM71ZclQFqPAZu0VGHXcajLw"; // Provided by the environment
+const apiKey = "AIzaSyB300EpegojEXHxcqmsUzD8rMLp07tShYE"; // Provided by the environment
 
 const App = () => {
   const [url, setUrl] = useState('');
