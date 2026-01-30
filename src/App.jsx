@@ -104,52 +104,36 @@ Format als strukturierten Plan mit:
 4. PAUSEN & ERHOLUNG
 
 Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`;
-
-      console.log('Sending request to API...');
       
-      // Try sending just the text directly or with different field names
       const response = await fetch('https://api.bennokahmann.me/ai/google/jill/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          message: promptText,
-          text: promptText,
-          query: promptText,
-          input: promptText
+          contents: [{
+            parts: [{
+              text: promptText
+            }]
+          }]
         })
       });
 
-      console.log('Response status:', response.status);
-
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('API Error Response:', errorText);
-        throw new Error(`API-Fehler (${response.status}): ${errorText}`);
+        throw new Error(`API-Fehler (${response.status})`);
       }
 
       const data = await response.json();
-      console.log('API Response data:', data);
       
-      // Try different possible response formats
+      // Parse Gemini response format
       let text = '';
-      if (typeof data === 'string') {
-        text = data;
+      if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
+        text = data.candidates[0].content.parts.map(part => part.text).join('');
       } else if (data.response) {
         text = data.response;
       } else if (data.text) {
         text = data.text;
-      } else if (data.content) {
-        text = data.content;
-      } else if (data.message) {
-        text = data.message;
-      } else if (data.result) {
-        text = data.result;
-      } else if (data.output) {
-        text = data.output;
-      } else if (data.answer) {
-        text = data.answer;
       } else {
         text = JSON.stringify(data, null, 2);
       }
@@ -162,8 +146,7 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
       setCurrentView('ai');
     } catch (error) {
       console.error('AI Error:', error);
-      const errorMsg = error.message || 'Unbekannter Fehler';
-      alert('❌ Fehler bei KI-Generierung:\n\n' + errorMsg + '\n\nBitte überprüfe:\n• Deine Internetverbindung\n• Ob der Server erreichbar ist\n• Die Browser-Console für Details (F12)');
+      alert('❌ Fehler bei KI-Generierung:\n\n' + error.message);
     } finally {
       setLoading(false);
     }
