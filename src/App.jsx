@@ -78,7 +78,7 @@ const StudyPlannerApp = () => {
     setAiResult('');
 
     try {
-      const prompt = `Du bist ein intelligenter Lernplan-Assistent für Schüler und Studenten.
+      const promptText = `Du bist ein intelligenter Lernplan-Assistent für Schüler und Studenten.
 
 STUNDENPLAN:
 ${schedule || 'Nicht angegeben'}
@@ -107,18 +107,21 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
 
       console.log('Sending request to API...');
       
+      // Try sending just the text directly or with different field names
       const response = await fetch('https://api.bennokahmann.me/ai/google/jill/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          prompt: prompt
+          message: promptText,
+          text: promptText,
+          query: promptText,
+          input: promptText
         })
       });
 
       console.log('Response status:', response.status);
-      console.log('Response headers:', response.headers);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -143,6 +146,10 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
         text = data.message;
       } else if (data.result) {
         text = data.result;
+      } else if (data.output) {
+        text = data.output;
+      } else if (data.answer) {
+        text = data.answer;
       } else {
         text = JSON.stringify(data, null, 2);
       }
