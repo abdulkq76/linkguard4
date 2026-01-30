@@ -105,6 +105,8 @@ Format als strukturierten Plan mit:
 
 Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`;
 
+      console.log('Sending request to API...');
+      
       const response = await fetch('https://api.bennokahmann.me/ai/google/jill/', {
         method: 'POST',
         headers: {
@@ -115,18 +117,46 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
         })
       });
 
+      console.log('Response status:', response.status);
+      console.log('Response headers:', response.headers);
+
       if (!response.ok) {
-        throw new Error('API-Anfrage fehlgeschlagen');
+        const errorText = await response.text();
+        console.error('API Error Response:', errorText);
+        throw new Error(`API-Fehler (${response.status}): ${errorText}`);
       }
 
       const data = await response.json();
-      const text = data.response || data.text || data.content || JSON.stringify(data);
+      console.log('API Response data:', data);
+      
+      // Try different possible response formats
+      let text = '';
+      if (typeof data === 'string') {
+        text = data;
+      } else if (data.response) {
+        text = data.response;
+      } else if (data.text) {
+        text = data.text;
+      } else if (data.content) {
+        text = data.content;
+      } else if (data.message) {
+        text = data.message;
+      } else if (data.result) {
+        text = data.result;
+      } else {
+        text = JSON.stringify(data, null, 2);
+      }
+      
+      if (!text || text.trim() === '') {
+        throw new Error('Keine Antwort von der API erhalten');
+      }
       
       setAiResult(text);
       setCurrentView('ai');
     } catch (error) {
       console.error('AI Error:', error);
-      alert('Fehler bei KI-Generierung: ' + error.message + '\n\nBitte überprüfe deine Internetverbindung und versuche es erneut.');
+      const errorMsg = error.message || 'Unbekannter Fehler';
+      alert('❌ Fehler bei KI-Generierung:\n\n' + errorMsg + '\n\nBitte überprüfe:\n• Deine Internetverbindung\n• Ob der Server erreichbar ist\n• Die Browser-Console für Details (F12)');
     } finally {
       setLoading(false);
     }
