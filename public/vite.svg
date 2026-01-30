@@ -1,39 +1,92 @@
-<svg id="linkguard-v2" width="180" height="180" viewBox="0 0 500 500" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stop-color="#3b82f6"></stop>
-                        <stop offset="100%" stop-color="#1d4ed8"></stop>
-                    </linearGradient>
-                    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-                        <blur stdDeviation="5"></blur>
-                    </filter>
-                </defs>
-
-                <!-- Haupt-Schild mit modernerer, kantigerer Form -->
-                <path d="M250 30C180 30 110 60 80 130C80 300 130 400 250 470C370 400 420 300 420 130C390 60 320 30 250 30Z" fill="url(#shieldGrad)"></path>
-                
-                <!-- Innerer Rand für Tiefe -->
-                <path d="M250 60C200 60 140 85 115 140C115 280 160 370 250 435C340 370 385 280 385 140C360 85 300 60 250 60Z" fill="white" fill-opacity="0.05"></path>
-
-                <!-- KI-Daten-Linien (Knotenpunkte) -->
-                <circle cx="250" cy="110" r="5" fill="#60a5fa"></circle>
-                <circle cx="150" cy="180" r="5" fill="#60a5fa"></circle>
-                <circle cx="350" cy="180" r="5" fill="#60a5fa"></circle>
-                <path d="M250 110L150 180M250 110L350 180" stroke="#60a5fa" stroke-width="2" stroke-opacity="0.4"></path>
-
-                <!-- Modernes minimalistisches Schloss -->
-                <g transform="translate(185, 200)">
-                    <!-- Bügel -->
-                    <path d="M25 50V40C25 17.9086 42.9086 0 65 0C87.0914 0 105 17.9086 105 40V50" stroke="white" stroke-width="22" stroke-linecap="round"></path>
-                    <!-- Körper -->
-                    <rect y="50" width="130" height="95" rx="12" fill="white"></rect>
-                    <!-- KI-Kern im Schloss -->
-                    <circle cx="65" cy="97" r="18" fill="#1e40af"></circle>
-                    <path d="M65 85V109M53 97H77" stroke="white" stroke-width="4" stroke-linecap="round"></path>
-                </g>
-                
-                <!-- "Sicherheits-Scan" Glanzlinie -->
-                <rect x="80" y="100" width="340" height="40" fill="white" fill-opacity="0.1" transform="rotate(-45 250 250)">
-                    <animate attributeName="y" from="-500" to="500" dur="3s" repeatCount="indefinite"></animate>
-                </rect>
-            </svg>
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Main Gradient -->
+    <linearGradient id="mainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#8b5cf6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ec4899;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Accent Gradient -->
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#06b6d4;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:1" />
+    </linearGradient>
+    
+    <!-- Glow Effect -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Background Glow Circle -->
+  <circle cx="256" cy="256" r="200" fill="url(#mainGrad)" opacity="0.08"/>
+  
+  <!-- Main Book Icon -->
+  <g transform="translate(256, 256)">
+    <!-- Closed Book -->
+    <rect x="-100" y="-120" width="200" height="240" rx="12" fill="url(#mainGrad)" filter="url(#glow)"/>
+    
+    <!-- Book Highlight -->
+    <rect x="-100" y="-120" width="60" height="240" rx="12" fill="white" opacity="0.1"/>
+    
+    <!-- Book Pages (white) -->
+    <rect x="-85" y="-100" width="170" height="200" rx="6" fill="white" opacity="0.95"/>
+    
+    <!-- Colored Page Tabs -->
+    <rect x="70" y="-80" width="15" height="40" rx="2" fill="#3b82f6" opacity="0.8"/>
+    <rect x="70" y="-30" width="15" height="40" rx="2" fill="#8b5cf6" opacity="0.8"/>
+    <rect x="70" y="20" width="15" height="40" rx="2" fill="#ec4899" opacity="0.8"/>
+    
+    <!-- Text Lines on Page -->
+    <line x1="-60" y1="-70" x2="50" y2="-70" stroke="url(#accentGrad)" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+    <line x1="-60" y1="-45" x2="40" y2="-45" stroke="url(#accentGrad)" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+    <line x1="-60" y1="-20" x2="50" y2="-20" stroke="url(#accentGrad)" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+    <line x1="-60" y1="5" x2="30" y2="5" stroke="url(#accentGrad)" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+    <line x1="-60" y1="30" x2="50" y2="30" stroke="url(#accentGrad)" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+    <line x1="-60" y1="55" x2="45" y2="55" stroke="url(#accentGrad)" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+    
+    <!-- AI Sparkle Badge -->
+    <g transform="translate(65, -105)">
+      <circle r="22" fill="url(#mainGrad)"/>
+      <!-- Star/Sparkle Shape -->
+      <path d="M 0,-12 L 3,-3 L 12,0 L 3,3 L 0,12 L -3,3 L -12,0 L -3,-3 Z" 
+            fill="white" 
+            opacity="0.95">
+        <animateTransform
+          attributeName="transform"
+          type="rotate"
+          from="0"
+          to="360"
+          dur="10s"
+          repeatCount="indefinite"/>
+      </path>
+      <circle r="3" fill="white"/>
+    </g>
+  </g>
+  
+  <!-- Floating Sparkles -->
+  <circle cx="120" cy="150" r="6" fill="#f59e0b" opacity="0.6">
+    <animate attributeName="cy" values="150;140;150" dur="3s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3s" repeatCount="indefinite"/>
+  </circle>
+  
+  <circle cx="400" cy="180" r="8" fill="#ec4899" opacity="0.6">
+    <animate attributeName="cy" values="180;170;180" dur="4s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.4;0.9;0.4" dur="4s" repeatCount="indefinite"/>
+  </circle>
+  
+  <circle cx="380" cy="400" r="5" fill="#3b82f6" opacity="0.6">
+    <animate attributeName="cy" values="400;390;400" dur="3.5s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.3;0.8;0.3" dur="3.5s" repeatCount="indefinite"/>
+  </circle>
+  
+  <circle cx="140" cy="380" r="7" fill="#8b5cf6" opacity="0.6">
+    <animate attributeName="cy" values="380;370;380" dur="4.5s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.5;1;0.5" dur="4.5s" repeatCount="indefinite"/>
+  </circle>
+</svg>
