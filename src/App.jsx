@@ -1,379 +1,550 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Shield, CheckCircle, AlertTriangle, XCircle, Search, 
-  Lock, Globe, Server, Activity, ArrowRight, ShieldCheck, 
-  AlertOctagon, Fingerprint, ChevronDown, ExternalLink,
-  ShieldAlert, Info, Zap
-} from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Trash2, Edit3 } from 'lucide-react';
 
-// --- COMPONENTS ---
-
-// 1. Subtle, high-end background
-const AmbientBackground = () => (
-  <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
-    <div className="absolute top-[-10%] left-[20%] w-[500px] h-[500px] bg-blue-600/10 blur-[120px] rounded-full mix-blend-screen" />
-    <div className="absolute bottom-[-10%] right-[10%] w-[600px] h-[600px] bg-indigo-600/10 blur-[120px] rounded-full mix-blend-screen" />
-    <div className="absolute top-[40%] left-[-10%] w-[400px] h-[400px] bg-purple-600/10 blur-[120px] rounded-full mix-blend-screen" />
-    <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 brightness-100 contrast-150 mix-blend-overlay"></div>
-  </div>
-);
-
-// 2. High-precision Trust Gauge
-const TrustScoreRing = ({ score }) => {
-  const radius = 58;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 100) * circumference;
-  
-  const getColor = (s) => {
-    if (s >= 80) return "text-emerald-500";
-    if (s >= 50) return "text-amber-500";
-    return "text-rose-500";
-  };
-
-  return (
-    <div className="relative w-40 h-40 flex items-center justify-center">
-      <svg className="w-full h-full -rotate-90 transform">
-        <circle cx="80" cy="80" r={radius} stroke="currentColor" strokeWidth="8" fill="transparent" className="text-slate-800" />
-        <circle 
-          cx="80" cy="80" r={radius} stroke="currentColor" strokeWidth="8" fill="transparent" 
-          strokeDasharray={circumference} 
-          strokeDashoffset={offset} 
-          strokeLinecap="round"
-          className={`transition-all duration-1000 ease-out ${getColor(score)} drop-shadow-lg`} 
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={`text-5xl font-bold tracking-tight ${getColor(score)}`}>{score}</span>
-        <span className="text-xs uppercase font-medium text-slate-500 mt-1">Trust Score</span>
-      </div>
-    </div>
-  );
-};
-
-// 3. Technical Detail Cards
-const DetailTile = ({ icon: Icon, label, value, status = "neutral" }) => {
-  const colors = {
-    safe: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    warning: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    danger: "bg-rose-500/10 text-rose-400 border-rose-500/20",
-    neutral: "bg-slate-800/50 text-slate-300 border-slate-700/50"
-  };
-
-  return (
-    <div className={`p-4 rounded-xl border flex items-center gap-4 transition-all hover:bg-slate-800/80 ${colors[status]}`}>
-      <div className={`p-2 rounded-lg bg-black/20`}>
-        <Icon size={20} />
-      </div>
-      <div>
-        <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{label}</div>
-        <div className="font-semibold text-sm">{value}</div>
-      </div>
-    </div>
-  );
-};
-
-const App = () => {
-  const [url, setUrl] = useState('');
+const StudyPlannerApp = () => {
+  const [darkMode, setDarkMode] = useState(false);
+  const [currentView, setCurrentView] = useState('welcome');
+  const [subjects, setSubjects] = useState([]);
+  const [tests, setTests] = useState([]);
+  const [schedule, setSchedule] = useState('');
+  const [aiResult, setAiResult] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [showDetails, setShowDetails] = useState(false);
-  const inputRef = useRef(null);
 
-  // Focus input on initial mount
+  // Load from localStorage
   useEffect(() => {
-    inputRef.current?.focus();
+    const savedSubjects = localStorage.getItem('studyflow_subjects');
+    const savedTests = localStorage.getItem('studyflow_tests');
+    const savedDarkMode = localStorage.getItem('studyflow_darkMode');
+    const savedSchedule = localStorage.getItem('studyflow_schedule');
+    
+    if (savedSubjects) setSubjects(JSON.parse(savedSubjects));
+    if (savedTests) setTests(JSON.parse(savedTests));
+    if (savedDarkMode) setDarkMode(JSON.parse(savedDarkMode));
+    if (savedSchedule) setSchedule(savedSchedule);
   }, []);
 
-  const analyzeLink = async () => {
-    if (!url) return;
+  // Save to localStorage
+  useEffect(() => {
+    localStorage.setItem('studyflow_subjects', JSON.stringify(subjects));
+  }, [subjects]);
+
+  useEffect(() => {
+    localStorage.setItem('studyflow_tests', JSON.stringify(tests));
+  }, [tests]);
+
+  useEffect(() => {
+    localStorage.setItem('studyflow_darkMode', JSON.stringify(darkMode));
+  }, [darkMode]);
+
+  useEffect(() => {
+    localStorage.setItem('studyflow_schedule', schedule);
+  }, [schedule]);
+
+  const subjectColors = [
+    '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', 
+    '#06b6d4', '#6366f1', '#f43f5e', '#14b8a6', '#a855f7'
+  ];
+
+  const addSubject = () => {
+    const name = prompt('Fach-Name:');
+    if (name && name.trim()) {
+      setSubjects([...subjects, { 
+        id: Date.now(), 
+        name: name.trim(), 
+        color: subjectColors[subjects.length % subjectColors.length] 
+      }]);
+    }
+  };
+
+  const removeSubject = (id) => {
+    setSubjects(subjects.filter(s => s.id !== id));
+  };
+
+  const addTest = () => {
+    const subject = prompt('Fach:');
+    const topic = prompt('Thema:');
+    const date = prompt('Datum (TT.MM.JJJJ):');
+    if (subject && topic && date) {
+      setTests([...tests, { id: Date.now(), subject: subject.trim(), topic: topic.trim(), date: date.trim() }]);
+    }
+  };
+
+  const removeTest = (id) => {
+    setTests(tests.filter(t => t.id !== id));
+  };
+
+  const generateAIPlan = async () => {
     setLoading(true);
-    setResult(null);
-    setShowDetails(false);
-
-    // Build suspense with a deliberate scan time
-    await new Promise(r => setTimeout(r, 2200));
-
-    const systemPrompt = `
-      You are an elite cyber-security intelligence AI. 
-      Analyze the provided URL for phishing, scams, credential harvesting, malware, and suspicious redirects.
-      Provide a highly professional assessment suitable for global enterprise users.
-      Respond ONLY in JSON format:
-      {
-        "score": 0-100 (integer, 100 is perfectly safe),
-        "status": "SAFE" | "SUSPICIOUS" | "MALICIOUS",
-        "headline": "A short, authoritative verdict (e.g., 'Official Financial Entity' or 'Critical Phishing Alert')",
-        "description": "A clear, concise security summary for non-technical users in English.",
-        "technical_points": ["Detailed point 1", "Detailed point 2", "Detailed point 3"],
-        "ssl_active": boolean,
-        "domain_age": "Plausible age or 'Unknown'",
-        "host": "Clean hostname",
-        "region": "Estimated server location"
-      }
-    `;
+    setAiResult('');
 
     try {
-      const response = await fetch(`https://api.bennokahmann.me/ai/google/jill/`, {
+      const prompt = `Du bist ein intelligenter Lernplan-Assistent für Schüler und Studenten.
+
+STUNDENPLAN:
+${schedule || 'Nicht angegeben'}
+
+KOMMENDE TESTS/KLAUSUREN:
+${tests.map(t => `- ${t.subject}: ${t.topic} am ${t.date}`).join('\n') || 'Keine Tests eingetragen'}
+
+FÄCHER:
+${subjects.map(s => s.name).join(', ') || 'Keine Fächer eingetragen'}
+
+Erstelle einen detaillierten, realistischen Lernplan für die nächsten 2 Wochen. Berücksichtige:
+- Verteilung der Lernzeit auf Fächer
+- Prioritäten basierend auf Testterminen
+- Regelmäßige Pausen (Pomodoro-Technik)
+- Wiederholungstage vor Tests
+- Realistische Zeitblöcke (30-90 Min pro Session)
+- Balance zwischen verschiedenen Fächern
+
+Format als strukturierten Plan mit:
+1. WOCHENÜBERSICHT (Montag bis Sonntag)
+2. TÄGLICHE LERNBLÖCKE (mit Zeiten)
+3. PRIORITÄTEN & TIPPS
+4. PAUSEN & ERHOLUNG
+
+Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`;
+
+      const response = await fetch('https://api.bennokahmann.me/ai/google/jill/', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `TARGET URL FOR ANALYSIS: ${url}` }] }],
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: { responseMimeType: "application/json" }
+          prompt: prompt
         })
       });
 
+      if (!response.ok) {
+        throw new Error('API-Anfrage fehlgeschlagen');
+      }
+
       const data = await response.json();
-      const text = data.candidates[0].content.parts[0].text;
-      const parsed = JSON.parse(text);
-      setResult(parsed);
+      const text = data.response || data.text || data.content || JSON.stringify(data);
+      
+      setAiResult(text);
+      setCurrentView('ai');
     } catch (error) {
-      console.error("Analysis Failed", error);
-      setResult({
-        score: 0,
-        status: "ERROR",
-        headline: "Analysis Interrupted",
-        description: "An error occurred while connecting to the security node. Please verify the URL and retry.",
-        technical_points: ["API Timeout", "Connection Reset"],
-        ssl_active: false,
-        domain_age: "N/A",
-        host: "N/A",
-        region: "N/A"
-      });
+      console.error('AI Error:', error);
+      alert('Fehler bei KI-Generierung: ' + error.message + '\n\nBitte überprüfe deine Internetverbindung und versuche es erneut.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter') analyzeLink();
-  };
-
-  const getStatusStyles = (score) => {
-    if (score >= 80) return { border: "border-emerald-500/30", bg: "bg-emerald-950/20", text: "text-emerald-400", accent: "from-emerald-400 to-emerald-600" };
-    if (score >= 50) return { border: "border-amber-500/30", bg: "bg-amber-950/20", text: "text-amber-400", accent: "from-amber-400 to-amber-600" };
-    return { border: "border-rose-500/30", bg: "bg-rose-950/20", text: "text-rose-400", accent: "from-rose-400 to-rose-600" };
-  };
-
-  return (
-    <div className="min-h-screen bg-[#020617] text-slate-100 font-sans selection:bg-blue-500/30">
-      <AmbientBackground />
-
-      {/* Modern Navigation */}
-      <nav className="border-b border-slate-800/60 bg-[#020617]/80 backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="bg-blue-600 rounded-lg p-1.5 shadow-lg shadow-blue-500/40">
-              <Shield size={20} className="text-white" />
-            </div>
-            <span className="font-bold text-xl tracking-tight text-white uppercase">
-              LinkGuard <span className="text-blue-500">PRO</span>
-            </span>
-          </div>
-          <div className="hidden sm:flex gap-8 text-[11px] font-bold uppercase tracking-widest text-slate-500">
-            <a href="#" className="hover:text-blue-400 transition-colors">Intelligence</a>
-            <a href="#" className="hover:text-blue-400 transition-colors">Network</a>
-            <a href="#" className="hover:text-blue-400 transition-colors">API Docs</a>
-          </div>
-        </div>
-      </nav>
-
-      <main className="max-w-4xl mx-auto px-6 pt-16 pb-24">
-        
-        {/* Hero Header */}
-        <div className="text-center mb-12">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/5 border border-blue-500/20 text-blue-400 text-[10px] font-black tracking-[0.2em] mb-6 animate-in fade-in slide-in-from-top-2">
-            <Zap size={12} className="fill-current" />
-            NEURAL ANALYSIS ENGINE V2.5.4
-          </div>
-          <h1 className="text-5xl md:text-7xl font-black tracking-tighter mb-6 text-white leading-[0.9]">
-            Verify Before <br/><span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-500">You Click.</span>
-          </h1>
-          <p className="text-slate-400 text-lg md:text-xl max-w-2xl mx-auto leading-relaxed">
-            Protect your digital identity with advanced real-time URL intelligence. 
-            Identify phishing, malware, and fraudulent sites instantly.
+  const formatAiResult = (text) => {
+    const lines = text.split('\n');
+    return lines.map((line, i) => {
+      // Main headers
+      if (line.match(/^#{1,2}\s/)) {
+        const level = line.match(/^#+/)[0].length;
+        const content = line.replace(/^#+\s/, '');
+        return level === 1 ? (
+          <h2 key={i} className="text-3xl sm:text-4xl font-bold mt-8 mb-4 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-400 dark:to-purple-400">
+            {content}
+          </h2>
+        ) : (
+          <h3 key={i} className="text-2xl sm:text-3xl font-bold mt-6 mb-3 text-blue-600 dark:text-blue-400">
+            {content}
+          </h3>
+        );
+      }
+      // Bold text
+      if (line.match(/^\*\*.+\*\*$/)) {
+        return (
+          <p key={i} className="font-bold text-lg sm:text-xl mt-5 mb-2 text-gray-900 dark:text-white">
+            {line.replace(/\*\*/g, '')}
           </p>
-        </div>
+        );
+      }
+      // List items
+      if (line.match(/^[-•]\s/)) {
+        return (
+          <li key={i} className="ml-6 mb-2 text-base sm:text-lg text-gray-700 dark:text-gray-300 leading-relaxed">
+            {line.replace(/^[-•]\s/, '')}
+          </li>
+        );
+      }
+      // Numbered lists
+      if (line.match(/^\d+\.\s/)) {
+        return (
+          <li key={i} className="ml-6 mb-2 text-base sm:text-lg text-gray-700 dark:text-gray-300 leading-relaxed list-decimal">
+            {line.replace(/^\d+\.\s/, '')}
+          </li>
+        );
+      }
+      // Regular paragraphs
+      if (line.trim()) {
+        return (
+          <p key={i} className="mb-3 text-base sm:text-lg text-gray-700 dark:text-gray-300 leading-relaxed">
+            {line}
+          </p>
+        );
+      }
+      return <div key={i} className="h-2" />;
+    });
+  };
 
-        {/* Unified Search UI (Stacked) */}
-        <div className="bg-slate-900/40 backdrop-blur-2xl border border-slate-800 rounded-3xl p-6 shadow-2xl transition-all duration-500">
-          <div className="flex flex-col gap-5">
-            
-            {/* 1. Input Box */}
-            <div className="relative group">
-              <div className="absolute inset-y-0 left-0 pl-5 flex items-center pointer-events-none">
-                <Search className={`w-6 h-6 transition-colors ${loading ? 'text-blue-500' : 'text-slate-600 group-hover:text-slate-400'}`} />
-              </div>
-              <input
-                ref={inputRef}
-                type="text"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Paste destination link here..."
-                className="block w-full pl-14 pr-6 py-5 bg-slate-950/80 border border-slate-800 rounded-2xl text-lg text-white placeholder-slate-700 focus:ring-2 focus:ring-blue-600 focus:border-transparent transition-all outline-none shadow-inner font-medium"
-              />
-            </div>
-
-            {/* 2. Primary Action Button (Stacked Below) */}
+  // Welcome Screen
+  if (currentView === 'welcome') {
+    return (
+      <div className={`min-h-screen transition-all duration-500 ${darkMode ? 'bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900' : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50'}`}>
+        <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+          {/* Theme Toggle */}
+          <div className="flex justify-end mb-6 sm:mb-8">
             <button
-              onClick={analyzeLink}
-              disabled={loading || !url}
-              className="w-full py-5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-black rounded-2xl text-xl tracking-widest shadow-xl shadow-blue-900/20 transition-all transform active:scale-[0.98] flex items-center justify-center gap-3 group relative overflow-hidden"
+              onClick={() => setDarkMode(!darkMode)}
+              className={`p-3 sm:p-4 rounded-2xl transition-all duration-300 hover:scale-110 ${
+                darkMode 
+                  ? 'bg-gray-800/50 backdrop-blur-lg text-yellow-400 shadow-xl shadow-yellow-500/20' 
+                  : 'bg-white/80 backdrop-blur-lg text-gray-700 shadow-xl'
+              }`}
             >
-              {loading ? (
-                <>
-                  <div className="w-6 h-6 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-                  SCANNING...
-                </>
-              ) : (
-                <>
-                  INITIALIZE SECURITY SCAN
-                  <ArrowRight size={24} className="group-hover:translate-x-1 transition-transform" />
-                </>
-              )}
+              {darkMode ? <Sun size={24} /> : <Moon size={24} />}
             </button>
-            
           </div>
-          
-          <div className="mt-6 flex flex-wrap justify-center items-center gap-x-8 gap-y-3 text-[10px] text-slate-500 font-black uppercase tracking-widest">
-            <span className="flex items-center gap-2"><Lock size={12} className="text-blue-500"/> SSL VALIDATION</span>
-            <span className="flex items-center gap-2"><Globe size={12} className="text-blue-500"/> GLOBAL REPUTATION</span>
-            <span className="flex items-center gap-2"><Activity size={12} className="text-blue-500"/> HEURISTIC CHECK</span>
-          </div>
-        </div>
 
-        {/* Results Dashboard */}
-        {result && !loading && (
-          <div className="mt-12 animate-in slide-in-from-bottom-10 fade-in duration-700">
-            
-            <div className={`relative overflow-hidden rounded-[2.5rem] border ${getStatusStyles(result.score).border} ${getStatusStyles(result.score).bg} shadow-2xl`}>
-              
-              {/* Gradient Status Line */}
-              <div className={`absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r ${getStatusStyles(result.score).accent}`} />
-
-              <div className="p-8 md:p-12">
-                <div className="flex flex-col md:flex-row items-center gap-10 md:gap-16">
-                  
-                  {/* Visual Trust Indicator */}
-                  <div className="flex-shrink-0 scale-110">
-                    <TrustScoreRing score={result.score} />
-                  </div>
-
-                  {/* Descriptive Text */}
-                  <div className="flex-grow text-center md:text-left">
-                    <div className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-[0.15em] mb-4 ${getStatusStyles(result.score).text} bg-black/40 border ${getStatusStyles(result.score).border}`}>
-                      {result.score >= 80 ? <ShieldCheck size={16}/> : result.score >= 50 ? <AlertTriangle size={16}/> : <ShieldAlert size={16}/>}
-                      {result.status}
-                    </div>
-                    <h2 className="text-3xl md:text-5xl font-black text-white mb-4 tracking-tight leading-tight">
-                      {result.headline}
-                    </h2>
-                    <p className="text-slate-300 leading-relaxed text-lg max-w-xl">
-                      {result.description}
-                    </p>
-                  </div>
-                </div>
+          {/* Hero Section */}
+          <div className="text-center max-w-5xl mx-auto mt-12 sm:mt-20">
+            <div className="mb-8 sm:mb-12 flex justify-center animate-bounce">
+              <div className={`p-6 sm:p-8 rounded-3xl ${
+                darkMode 
+                  ? 'bg-gradient-to-br from-blue-600 to-purple-600 shadow-2xl shadow-purple-500/50' 
+                  : 'bg-gradient-to-br from-blue-500 to-purple-500 shadow-2xl'
+              }`}>
+                <Book size={64} className="text-white sm:w-20 sm:h-20" />
               </div>
-
-              {/* Technical Details Controller */}
-              <button 
-                className="w-full bg-black/40 border-t border-slate-800/50 py-4 flex justify-center items-center gap-3 cursor-pointer hover:bg-black/60 transition-all text-xs font-bold text-slate-400 uppercase tracking-widest"
-                onClick={() => setShowDetails(!showDetails)}
-              >
-                {showDetails ? 'Hide Deep Analysis' : 'Show Deep Analysis Data'}
-                <ChevronDown size={18} className={`transition-transform duration-500 ${showDetails ? 'rotate-180' : ''}`}/>
-              </button>
-
-              {/* Collapsible Content */}
-              {showDetails && (
-                <div className="p-8 md:p-12 border-t border-slate-800/50 bg-black/30 animate-in slide-in-from-top-4 fade-in duration-500">
-                  
-                  {/* Metadata Grid */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
-                    <DetailTile 
-                      icon={Globe} 
-                      label="Domain Host" 
-                      value={result.host} 
-                    />
-                    <DetailTile 
-                      icon={Lock} 
-                      label="SSL Status" 
-                      value={result.ssl_active ? "Encrypted" : "Unsecured"} 
-                      status={result.ssl_active ? "safe" : "danger"}
-                    />
-                    <DetailTile 
-                      icon={Server} 
-                      label="Server Location" 
-                      value={result.region || "Restricted"} 
-                    />
-                     <DetailTile 
-                      icon={Activity} 
-                      label="Domain Age" 
-                      value={result.domain_age} 
-                      status="neutral"
-                    />
-                  </div>
-
-                  {/* Analysis Breakdown */}
-                  <div className="bg-slate-900/50 rounded-3xl p-8 border border-slate-800">
-                    <h3 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
-                      <Info size={14} className="text-blue-500" /> Neural Scan Findings
-                    </h3>
-                    <div className="grid md:grid-cols-2 gap-x-12 gap-y-4">
-                      {result.technical_points.map((point, idx) => (
-                        <div key={idx} className="flex items-start gap-4 text-slate-300 group">
-                          <div className={`mt-1.5 h-1.5 w-1.5 rounded-full flex-shrink-0 transition-transform group-hover:scale-125 ${result.score >= 80 ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]'}`} />
-                          <span className="text-sm font-medium leading-relaxed">{point}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
             
-            {/* Legend / Safety Zones */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-12">
+            <h1 className={`text-5xl sm:text-7xl lg:text-8xl font-extrabold mb-6 sm:mb-8 tracking-tight ${
+              darkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              StudyFlow
+            </h1>
+            
+            <p className={`text-xl sm:text-2xl lg:text-3xl mb-12 sm:mb-16 ${
+              darkMode ? 'text-gray-200' : 'text-gray-600'
+            } max-w-3xl mx-auto leading-relaxed px-4`}>
+              Dein intelligenter Lernplan-Assistent. Organisiere dein Studium mit KI-Unterstützung.
+            </p>
+
+            <button
+              onClick={() => setCurrentView('dashboard')}
+              className="group px-10 sm:px-16 py-5 sm:py-7 bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white rounded-2xl sm:rounded-3xl text-xl sm:text-2xl font-bold shadow-2xl hover:shadow-blue-500/50 transition-all duration-300 hover:scale-105 hover:-translate-y-1"
+            >
+              <span className="flex items-center gap-3 sm:gap-4">
+                Lernplan erstellen
+                <ChevronRight className="group-hover:translate-x-2 transition-transform" size={28} />
+              </span>
+            </button>
+
+            {/* Features Grid */}
+            <div className="mt-16 sm:mt-24 grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8 px-4">
               {[
-                { label: "Verified", color: "bg-emerald-500", desc: "Safe corporate or official domains." },
-                { label: "Suspicious", color: "bg-amber-500", desc: "Unknown origin or low reputation." },
-                { label: "High Risk", color: "bg-rose-500", desc: "Phishing or malicious payloads detected." }
-              ].map((item, i) => (
-                <div key={i} className="bg-slate-900/30 p-5 rounded-2xl border border-slate-800/50">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className={`w-3 h-3 rounded-full ${item.color}`} />
-                    <span className="text-xs font-black uppercase tracking-widest text-slate-300">{item.label}</span>
+                { icon: Calendar, title: 'Stundenplan', desc: 'Organisiere deinen Alltag perfekt', gradient: 'from-blue-500 to-cyan-500' },
+                { icon: Brain, title: 'KI-Assistent', desc: 'Intelligente Lernpläne auf Knopfdruck', gradient: 'from-purple-500 to-pink-500' },
+                { icon: Clock, title: 'Zeitmanagement', desc: 'Effizient lernen mit System', gradient: 'from-orange-500 to-red-500' }
+              ].map((feature, i) => (
+                <div 
+                  key={i} 
+                  className={`group p-8 sm:p-10 rounded-3xl transition-all duration-300 hover:scale-105 hover:-translate-y-2 ${
+                    darkMode 
+                      ? 'bg-gray-800/40 backdrop-blur-xl border border-gray-700 shadow-2xl hover:shadow-purple-500/30' 
+                      : 'bg-white/90 backdrop-blur-xl shadow-2xl hover:shadow-xl'
+                  }`}
+                >
+                  <div className={`inline-block p-4 sm:p-5 rounded-2xl bg-gradient-to-br ${feature.gradient} mb-6 group-hover:rotate-6 transition-transform`}>
+                    <feature.icon size={48} className="text-white sm:w-14 sm:h-14" />
                   </div>
-                  <p className="text-xs text-slate-500 leading-relaxed font-medium">{item.desc}</p>
+                  <h3 className={`text-2xl sm:text-3xl font-bold mb-3 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                    {feature.title}
+                  </h3>
+                  <p className={`text-base sm:text-lg ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                    {feature.desc}
+                  </p>
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
+  // Main Dashboard & AI View
+  return (
+    <div className={`min-h-screen transition-all duration-500 ${darkMode ? 'bg-gray-900' : 'bg-gray-50'}`}>
+      <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 sm:gap-0 mb-6 sm:mb-8">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <button
+              onClick={() => setCurrentView('welcome')}
+              className={`p-3 sm:p-4 rounded-2xl transition-all hover:scale-110 ${
+                darkMode ? 'bg-gray-800 text-white shadow-lg' : 'bg-white text-gray-900 shadow-xl'
+              }`}
+            >
+              <Book size={28} />
+            </button>
+            <h1 className={`text-3xl sm:text-4xl lg:text-5xl font-extrabold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+              {currentView === 'ai' ? '✨ Dein KI-Lernplan' : '📚 Dashboard'}
+            </h1>
+          </div>
+
+          <div className="flex gap-2 sm:gap-3 w-full sm:w-auto">
+            <button
+              onClick={() => setCurrentView(currentView === 'ai' ? 'dashboard' : 'dashboard')}
+              className={`flex-1 sm:flex-none px-5 sm:px-8 py-3 sm:py-4 rounded-xl sm:rounded-2xl font-bold text-base sm:text-lg transition-all ${
+                currentView === 'dashboard'
+                  ? darkMode 
+                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/50' 
+                    : 'bg-blue-600 text-white shadow-xl'
+                  : darkMode
+                    ? 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                    : 'bg-white text-gray-700 hover:bg-gray-100 shadow-lg'
+              }`}
+            >
+              Dashboard
+            </button>
+            
+            {aiResult && (
+              <button
+                onClick={() => setCurrentView('ai')}
+                className={`flex-1 sm:flex-none px-5 sm:px-8 py-3 sm:py-4 rounded-xl sm:rounded-2xl font-bold text-base sm:text-lg transition-all ${
+                  currentView === 'ai'
+                    ? darkMode 
+                      ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50' 
+                      : 'bg-purple-600 text-white shadow-xl'
+                    : darkMode
+                      ? 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                      : 'bg-white text-gray-700 hover:bg-gray-100 shadow-lg'
+                }`}
+              >
+                KI-Plan
+              </button>
+            )}
+            
+            <button
+              onClick={() => setDarkMode(!darkMode)}
+              className={`p-3 sm:p-4 rounded-xl sm:rounded-2xl transition-all hover:scale-110 ${
+                darkMode ? 'bg-gray-800 text-yellow-400 shadow-lg' : 'bg-white text-gray-700 shadow-xl'
+              }`}
+            >
+              {darkMode ? <Sun size={24} /> : <Moon size={24} />}
+            </button>
+          </div>
+        </div>
+
+        {currentView === 'dashboard' ? (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
+            {/* Left Sidebar */}
+            <div className="lg:col-span-1 space-y-6 sm:space-y-8">
+              {/* Subjects Card */}
+              <div className={`p-6 sm:p-8 rounded-2xl sm:rounded-3xl transition-all ${
+                darkMode ? 'bg-gray-800 shadow-2xl border border-gray-700' : 'bg-white shadow-2xl'
+              }`}>
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className={`text-2xl sm:text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                    📚 Fächer
+                  </h2>
+                  <button
+                    onClick={addSubject}
+                    className="p-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl sm:rounded-2xl hover:scale-110 transition-all shadow-lg hover:shadow-xl"
+                  >
+                    <Plus size={24} />
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {subjects.length === 0 ? (
+                    <div className={`text-center py-12 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      <Book size={48} className="mx-auto mb-4 opacity-30" />
+                      <p className="text-lg">Noch keine Fächer</p>
+                      <p className="text-sm mt-2">Klicke auf + um zu starten</p>
+                    </div>
+                  ) : (
+                    subjects.map(subject => (
+                      <div
+                        key={subject.id}
+                        className={`group flex justify-between items-center p-4 sm:p-5 rounded-xl sm:rounded-2xl transition-all hover:scale-[1.02] ${
+                          darkMode ? 'bg-gray-700/50 hover:bg-gray-700' : 'bg-gray-50 hover:bg-gray-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 sm:gap-4">
+                          <div
+                            className="w-5 h-5 sm:w-6 sm:h-6 rounded-full shadow-lg"
+                            style={{ backgroundColor: subject.color }}
+                          />
+                          <span className={`font-bold text-base sm:text-lg ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                            {subject.name}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => removeSubject(subject.id)}
+                          className={`p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-all ${
+                            darkMode ? 'hover:bg-gray-600 text-red-400' : 'hover:bg-gray-200 text-red-600'
+                          }`}
+                        >
+                          <X size={20} />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Tests Card */}
+              <div className={`p-6 sm:p-8 rounded-2xl sm:rounded-3xl transition-all ${
+                darkMode ? 'bg-gray-800 shadow-2xl border border-gray-700' : 'bg-white shadow-2xl'
+              }`}>
+                <div className="flex justify-between items-center mb-6">
+                  <h2 className={`text-2xl sm:text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                    📝 Tests
+                  </h2>
+                  <button
+                    onClick={addTest}
+                    className="p-3 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl sm:rounded-2xl hover:scale-110 transition-all shadow-lg hover:shadow-xl"
+                  >
+                    <Plus size={24} />
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {tests.length === 0 ? (
+                    <div className={`text-center py-12 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      <Calendar size={48} className="mx-auto mb-4 opacity-30" />
+                      <p className="text-lg">Keine Tests</p>
+                      <p className="text-sm mt-2">Trage deine Prüfungen ein</p>
+                    </div>
+                  ) : (
+                    tests.map(test => (
+                      <div
+                        key={test.id}
+                        className={`group p-4 sm:p-5 rounded-xl sm:rounded-2xl transition-all hover:scale-[1.02] ${
+                          darkMode ? 'bg-purple-900/30 border border-purple-700/50' : 'bg-purple-50 border border-purple-200'
+                        }`}
+                      >
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="font-bold text-lg text-purple-600 dark:text-purple-400">
+                            {test.subject}
+                          </span>
+                          <button
+                            onClick={() => removeTest(test.id)}
+                            className={`p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-all ${
+                              darkMode ? 'hover:bg-purple-800 text-red-400' : 'hover:bg-purple-100 text-red-600'
+                            }`}
+                          >
+                            <X size={18} />
+                          </button>
+                        </div>
+                        <p className={`text-sm sm:text-base mb-2 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                          {test.topic}
+                        </p>
+                        <p className={`text-xs sm:text-sm ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                          📅 {test.date}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Right Side */}
+            <div className="lg:col-span-2 space-y-6 sm:space-y-8">
+              {/* Schedule Input */}
+              <div className={`p-6 sm:p-8 rounded-2xl sm:rounded-3xl transition-all ${
+                darkMode ? 'bg-gray-800 shadow-2xl border border-gray-700' : 'bg-white shadow-2xl'
+              }`}>
+                <h2 className={`text-2xl sm:text-3xl font-bold mb-4 sm:mb-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                  🗓️ Stundenplan
+                </h2>
+                <textarea
+                  value={schedule}
+                  onChange={(e) => setSchedule(e.target.value)}
+                  placeholder="Trage hier deinen Stundenplan ein...&#10;&#10;Beispiel:&#10;Montag: 8-10 Mathe, 10-12 Deutsch&#10;Dienstag: 8-10 Bio, 12-14 Sport&#10;..."
+                  className={`w-full h-56 sm:h-64 p-4 sm:p-6 rounded-xl sm:rounded-2xl border-2 font-mono text-sm sm:text-base transition-all ${
+                    darkMode 
+                      ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:border-blue-500' 
+                      : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400 focus:border-blue-500'
+                  } focus:outline-none focus:ring-4 focus:ring-blue-500/20`}
+                />
+              </div>
+
+              {/* AI Generation */}
+              <div className={`p-6 sm:p-8 rounded-2xl sm:rounded-3xl transition-all ${
+                darkMode 
+                  ? 'bg-gradient-to-br from-blue-900/50 to-purple-900/50 border border-purple-700/50 shadow-2xl' 
+                  : 'bg-gradient-to-br from-blue-50 to-purple-50 shadow-2xl'
+              }`}>
+                <div className="flex items-center gap-3 sm:gap-4 mb-6">
+                  <div className="p-3 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl">
+                    <Brain size={32} className="text-white" />
+                  </div>
+                  <h2 className={`text-2xl sm:text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                    KI-Lernplan generieren
+                  </h2>
+                </div>
+
+                <p className={`mb-6 text-base sm:text-lg ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
+                  Lass unsere KI einen personalisierten Lernplan für dich erstellen, basierend auf deinem Stundenplan, Fächern und anstehenden Tests.
+                </p>
+
+                <button
+                  onClick={generateAIPlan}
+                  disabled={loading}
+                  className={`w-full py-5 sm:py-6 rounded-xl sm:rounded-2xl font-bold text-lg sm:text-xl transition-all flex items-center justify-center gap-3 sm:gap-4 ${
+                    loading
+                      ? 'bg-gray-400 text-gray-200 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white hover:shadow-2xl hover:scale-[1.02] shadow-xl'
+                  }`}
+                >
+                  {loading ? (
+                    <>
+                      <div className="animate-spin rounded-full h-6 w-6 sm:h-7 sm:w-7 border-b-2 border-white"></div>
+                      Generiere Lernplan...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={28} />
+                      KI-Lernplan erstellen
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          // AI Results View
+          <div className={`max-w-5xl mx-auto p-6 sm:p-10 lg:p-12 rounded-2xl sm:rounded-3xl transition-all ${
+            darkMode ? 'bg-gray-800 shadow-2xl border border-gray-700' : 'bg-white shadow-2xl'
+          }`}>
+            {aiResult ? (
+              <div className="prose prose-lg max-w-none">
+                {formatAiResult(aiResult)}
+              </div>
+            ) : (
+              <div className="text-center py-20 sm:py-32">
+                <Brain size={80} className={`mx-auto mb-8 ${darkMode ? 'text-gray-600' : 'text-gray-400'}`} />
+                <h2 className={`text-2xl sm:text-3xl font-bold mb-4 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                  Noch kein Lernplan generiert
+                </h2>
+                <p className={`text-lg sm:text-xl mb-8 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                  Gehe zum Dashboard und erstelle deinen ersten KI-Lernplan!
+                </p>
+                <button
+                  onClick={() => setCurrentView('dashboard')}
+                  className="px-8 py-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-2xl font-bold text-lg hover:scale-105 transition-all shadow-xl"
+                >
+                  Zum Dashboard
+                </button>
+              </div>
+            )}
           </div>
         )}
-
-      </main>
-
-      {/* Global Footer */}
-      <footer className="border-t border-slate-900 bg-black/40 py-12 px-6">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
-          <div className="flex items-center gap-2.5 opacity-60">
-            <ShieldCheck size={18} className="text-blue-500" />
-            <span className="font-bold text-sm tracking-widest uppercase">LinkGuard Intelligence</span>
-          </div>
-          <div className="flex gap-10 text-[10px] font-black uppercase tracking-widest text-slate-600">
-            <a href="#" className="hover:text-blue-500 transition-colors">Privacy Infrastructure</a>
-            <a href="#" className="hover:text-blue-500 transition-colors">Transparency</a>
-            <a href="#" className="hover:text-blue-500 transition-colors">Node Status</a>
-          </div>
-          <p className="text-[10px] font-bold text-slate-700 uppercase tracking-widest italic">
-            Protecting the digital frontier.
-          </p>
-        </div>
-      </footer>
+      </div>
     </div>
   );
 };
 
-export default App;
-
+export default StudyPlannerApp;
