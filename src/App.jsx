@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Trash2, Edit3 } from 'lucide-react';
+import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Download, TrendingUp, Target, Zap, Play, Pause, RotateCcw } from 'lucide-react';
 
 const StudyPlannerApp = () => {
   const [darkMode, setDarkMode] = useState(false);
@@ -9,6 +9,21 @@ const StudyPlannerApp = () => {
   const [schedule, setSchedule] = useState('');
   const [aiResult, setAiResult] = useState('');
   const [loading, setLoading] = useState(false);
+  const [studyStreak, setStudyStreak] = useState(0);
+  const [showTimer, setShowTimer] = useState(false);
+  const [timerMinutes, setTimerMinutes] = useState(25);
+  const [timerSeconds, setTimerSeconds] = useState(0);
+  const [timerRunning, setTimerRunning] = useState(false);
+
+  // Motivational quotes
+  const quotes = [
+    "Der beste Zeitpunkt anzufangen war gestern. Der zweitbeste ist jetzt! 🚀",
+    "Erfolg ist die Summe kleiner Anstrengungen, die jeden Tag wiederholt werden. 💪",
+    "Du schaffst das! Jeder Schritt zählt. ✨",
+    "Bildung ist die mächtigste Waffe, um die Welt zu verändern. 🌟",
+    "Glaub an dich selbst und alles ist möglich! 🎯"
+  ];
+  const [currentQuote, setCurrentQuote] = useState(quotes[0]);
 
   // Load from localStorage
   useEffect(() => {
@@ -16,11 +31,18 @@ const StudyPlannerApp = () => {
     const savedTests = localStorage.getItem('studyflow_tests');
     const savedDarkMode = localStorage.getItem('studyflow_darkMode');
     const savedSchedule = localStorage.getItem('studyflow_schedule');
+    const savedStreak = localStorage.getItem('studyflow_streak');
+    const savedAiResult = localStorage.getItem('studyflow_aiResult');
     
     if (savedSubjects) setSubjects(JSON.parse(savedSubjects));
     if (savedTests) setTests(JSON.parse(savedTests));
     if (savedDarkMode) setDarkMode(JSON.parse(savedDarkMode));
     if (savedSchedule) setSchedule(savedSchedule);
+    if (savedStreak) setStudyStreak(parseInt(savedStreak));
+    if (savedAiResult) setAiResult(savedAiResult);
+
+    // Random quote on load
+    setCurrentQuote(quotes[Math.floor(Math.random() * quotes.length)]);
   }, []);
 
   // Save to localStorage
@@ -39,6 +61,36 @@ const StudyPlannerApp = () => {
   useEffect(() => {
     localStorage.setItem('studyflow_schedule', schedule);
   }, [schedule]);
+
+  useEffect(() => {
+    localStorage.setItem('studyflow_streak', studyStreak.toString());
+  }, [studyStreak]);
+
+  useEffect(() => {
+    localStorage.setItem('studyflow_aiResult', aiResult);
+  }, [aiResult]);
+
+  // Pomodoro Timer
+  useEffect(() => {
+    let interval = null;
+    if (timerRunning) {
+      interval = setInterval(() => {
+        if (timerSeconds === 0) {
+          if (timerMinutes === 0) {
+            setTimerRunning(false);
+            alert('⏰ Pomodoro fertig! Zeit für eine Pause! 🎉');
+            setStudyStreak(prev => prev + 1);
+          } else {
+            setTimerMinutes(timerMinutes - 1);
+            setTimerSeconds(59);
+          }
+        } else {
+          setTimerSeconds(timerSeconds - 1);
+        }
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [timerRunning, timerMinutes, timerSeconds]);
 
   const subjectColors = [
     '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', 
@@ -103,7 +155,7 @@ Format als strukturierten Plan mit:
 3. PRIORITÄTEN & TIPPS
 4. PAUSEN & ERHOLUNG
 
-Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`;
+Sei motivierend, realistisch und konkret! Nutze Emojis und Markdown-Formatierung (##, **, -, etc.).`;
       
       const response = await fetch('https://api.bennokahmann.me/ai/google/jill/', {
         method: 'POST',
@@ -120,13 +172,11 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
         throw new Error(`API-Fehler (${response.status})`);
       }
 
       const data = await response.json();
       
-      // Parse Gemini response format
       let text = '';
       if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts) {
         text = data.candidates[0].content.parts.map(part => part.text).join('');
@@ -152,56 +202,91 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
     }
   };
 
+  const exportPlan = () => {
+    const blob = new Blob([aiResult], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'mein-lernplan.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const formatAiResult = (text) => {
     const lines = text.split('\n');
+    let inList = false;
+    let inBold = false;
+    
     return lines.map((line, i) => {
-      // Main headers
-      if (line.match(/^#{1,2}\s/)) {
-        const level = line.match(/^#+/)[0].length;
-        const content = line.replace(/^#+\s/, '');
-        return level === 1 ? (
+      // Headers with ##
+      if (line.match(/^##\s+/)) {
+        const content = line.replace(/^##\s+/, '');
+        return (
           <h2 key={i} className="text-3xl sm:text-4xl font-bold mt-8 mb-4 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600 dark:from-blue-400 dark:to-purple-400">
             {content}
           </h2>
-        ) : (
-          <h3 key={i} className="text-2xl sm:text-3xl font-bold mt-6 mb-3 text-blue-600 dark:text-blue-400">
-            {content}
-          </h3>
         );
       }
-      // Bold text
-      if (line.match(/^\*\*.+\*\*$/)) {
+      
+      // Headers with #
+      if (line.match(/^#\s+/)) {
+        const content = line.replace(/^#\s+/, '');
         return (
-          <p key={i} className="font-bold text-lg sm:text-xl mt-5 mb-2 text-gray-900 dark:text-white">
-            {line.replace(/\*\*/g, '')}
+          <h1 key={i} className="text-4xl sm:text-5xl font-extrabold mt-10 mb-6 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 dark:from-blue-400 dark:via-purple-400 dark:to-pink-400">
+            {content}
+          </h1>
+        );
+      }
+
+      // Bold text with **
+      const boldRegex = /\*\*(.*?)\*\*/g;
+      if (line.match(boldRegex)) {
+        const parts = line.split(boldRegex);
+        return (
+          <p key={i} className="mb-3 text-base sm:text-lg leading-relaxed">
+            {parts.map((part, j) => 
+              j % 2 === 1 ? (
+                <strong key={j} className={`font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>{part}</strong>
+              ) : (
+                <span key={j} className={darkMode ? 'text-gray-300' : 'text-gray-700'}>{part}</span>
+              )
+            )}
           </p>
         );
       }
-      // List items
+
+      // List items with - or •
       if (line.match(/^[-•]\s/)) {
+        const content = line.replace(/^[-•]\s/, '');
         return (
-          <li key={i} className="ml-6 mb-2 text-base sm:text-lg text-gray-700 dark:text-gray-300 leading-relaxed">
-            {line.replace(/^[-•]\s/, '')}
+          <li key={i} className={`ml-8 mb-3 text-base sm:text-lg leading-relaxed list-disc ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+            {content}
           </li>
         );
       }
+
       // Numbered lists
       if (line.match(/^\d+\.\s/)) {
+        const content = line.replace(/^\d+\.\s/, '');
         return (
-          <li key={i} className="ml-6 mb-2 text-base sm:text-lg text-gray-700 dark:text-gray-300 leading-relaxed list-decimal">
-            {line.replace(/^\d+\.\s/, '')}
+          <li key={i} className={`ml-8 mb-3 text-base sm:text-lg leading-relaxed list-decimal ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+            {content}
           </li>
         );
       }
+
       // Regular paragraphs
       if (line.trim()) {
         return (
-          <p key={i} className="mb-3 text-base sm:text-lg text-gray-700 dark:text-gray-300 leading-relaxed">
+          <p key={i} className={`mb-4 text-base sm:text-lg leading-relaxed ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
             {line}
           </p>
         );
       }
-      return <div key={i} className="h-2" />;
+
+      return <div key={i} className="h-3" />;
     });
   };
 
@@ -210,7 +295,6 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
     return (
       <div className={`min-h-screen transition-all duration-500 ${darkMode ? 'bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900' : 'bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50'}`}>
         <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-          {/* Theme Toggle */}
           <div className="flex justify-end mb-6 sm:mb-8">
             <button
               onClick={() => setDarkMode(!darkMode)}
@@ -224,7 +308,6 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
             </button>
           </div>
 
-          {/* Hero Section */}
           <div className="text-center max-w-5xl mx-auto mt-12 sm:mt-20">
             <div className="mb-8 sm:mb-12 flex justify-center animate-bounce">
               <div className={`p-6 sm:p-8 rounded-3xl ${
@@ -258,12 +341,11 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
               </span>
             </button>
 
-            {/* Features Grid */}
             <div className="mt-16 sm:mt-24 grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8 px-4">
               {[
                 { icon: Calendar, title: 'Stundenplan', desc: 'Organisiere deinen Alltag perfekt', gradient: 'from-blue-500 to-cyan-500' },
                 { icon: Brain, title: 'KI-Assistent', desc: 'Intelligente Lernpläne auf Knopfdruck', gradient: 'from-purple-500 to-pink-500' },
-                { icon: Clock, title: 'Zeitmanagement', desc: 'Effizient lernen mit System', gradient: 'from-orange-500 to-red-500' }
+                { icon: Clock, title: 'Pomodoro Timer', desc: 'Effizient lernen mit Fokus', gradient: 'from-orange-500 to-red-500' }
               ].map((feature, i) => (
                 <div 
                   key={i} 
@@ -313,7 +395,7 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
 
           <div className="flex gap-2 sm:gap-3 w-full sm:w-auto">
             <button
-              onClick={() => setCurrentView(currentView === 'ai' ? 'dashboard' : 'dashboard')}
+              onClick={() => setCurrentView('dashboard')}
               className={`flex-1 sm:flex-none px-5 sm:px-8 py-3 sm:py-4 rounded-xl sm:rounded-2xl font-bold text-base sm:text-lg transition-all ${
                 currentView === 'dashboard'
                   ? darkMode 
@@ -354,6 +436,106 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
             </button>
           </div>
         </div>
+
+        {/* Motivational Quote & Stats Bar */}
+        <div className={`mb-6 p-6 rounded-2xl sm:rounded-3xl transition-all ${
+          darkMode ? 'bg-gradient-to-r from-blue-900/30 to-purple-900/30 border border-purple-700/50' : 'bg-gradient-to-r from-blue-100 to-purple-100 border border-purple-200'
+        }`}>
+          <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+            <div className="flex items-center gap-3">
+              <Sparkles className="text-yellow-500" size={24} />
+              <p className={`text-base sm:text-lg font-medium italic ${darkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+                {currentQuote}
+              </p>
+            </div>
+            
+            <div className="flex items-center gap-6">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="text-green-500" size={24} />
+                <span className={`text-lg font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                  {studyStreak} 🔥
+                </span>
+                <span className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>Streak</span>
+              </div>
+              
+              <button
+                onClick={() => setShowTimer(!showTimer)}
+                className={`px-4 py-2 rounded-xl font-bold transition-all hover:scale-105 ${
+                  darkMode ? 'bg-orange-600 text-white' : 'bg-orange-500 text-white'
+                }`}
+              >
+                <Clock size={20} className="inline mr-2" />
+                Timer
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Pomodoro Timer */}
+        {showTimer && (
+          <div className={`mb-6 p-8 rounded-2xl sm:rounded-3xl transition-all ${
+            darkMode ? 'bg-gray-800 border border-gray-700 shadow-2xl' : 'bg-white shadow-2xl'
+          }`}>
+            <div className="text-center">
+              <h3 className={`text-2xl font-bold mb-6 ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                🍅 Pomodoro Timer
+              </h3>
+              
+              <div className={`text-7xl font-mono font-bold mb-8 ${darkMode ? 'text-blue-400' : 'text-blue-600'}`}>
+                {String(timerMinutes).padStart(2, '0')}:{String(timerSeconds).padStart(2, '0')}
+              </div>
+              
+              <div className="flex justify-center gap-4">
+                <button
+                  onClick={() => setTimerRunning(!timerRunning)}
+                  className={`px-8 py-4 rounded-xl font-bold text-lg transition-all hover:scale-105 ${
+                    timerRunning 
+                      ? 'bg-red-600 text-white' 
+                      : 'bg-green-600 text-white'
+                  }`}
+                >
+                  {timerRunning ? (
+                    <><Pause size={20} className="inline mr-2" />Pause</>
+                  ) : (
+                    <><Play size={20} className="inline mr-2" />Start</>
+                  )}
+                </button>
+                
+                <button
+                  onClick={() => {
+                    setTimerRunning(false);
+                    setTimerMinutes(25);
+                    setTimerSeconds(0);
+                  }}
+                  className={`px-8 py-4 rounded-xl font-bold text-lg transition-all hover:scale-105 ${
+                    darkMode ? 'bg-gray-700 text-white' : 'bg-gray-200 text-gray-900'
+                  }`}
+                >
+                  <RotateCcw size={20} className="inline mr-2" />
+                  Reset
+                </button>
+              </div>
+              
+              <div className="mt-6 flex justify-center gap-3">
+                {[15, 25, 45].map(mins => (
+                  <button
+                    key={mins}
+                    onClick={() => {
+                      setTimerMinutes(mins);
+                      setTimerSeconds(0);
+                      setTimerRunning(false);
+                    }}
+                    className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
+                      darkMode ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    {mins} Min
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {currentView === 'dashboard' ? (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
@@ -540,9 +722,40 @@ Sei motivierend, realistisch und konkret! Nutze Emojis für bessere Lesbarkeit.`
             darkMode ? 'bg-gray-800 shadow-2xl border border-gray-700' : 'bg-white shadow-2xl'
           }`}>
             {aiResult ? (
-              <div className="prose prose-lg max-w-none">
-                {formatAiResult(aiResult)}
-              </div>
+              <>
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
+                  <h2 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-900'}`}>
+                    Dein Lernplan
+                  </h2>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={exportPlan}
+                      className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-xl font-bold hover:scale-105 transition-all shadow-lg"
+                    >
+                      <Download size={20} className="inline mr-2" />
+                      Export
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm('Möchtest du den aktuellen Lernplan wirklich löschen?')) {
+                          setAiResult('');
+                          setCurrentView('dashboard');
+                        }
+                      }}
+                      className={`px-6 py-3 rounded-xl font-bold hover:scale-105 transition-all shadow-lg ${
+                        darkMode ? 'bg-red-600 text-white' : 'bg-red-500 text-white'
+                      }`}
+                    >
+                      <X size={20} className="inline mr-2" />
+                      Löschen
+                    </button>
+                  </div>
+                </div>
+                
+                <div className="prose prose-lg max-w-none">
+                  {formatAiResult(aiResult)}
+                </div>
+              </>
             ) : (
               <div className="text-center py-20 sm:py-32">
                 <Brain size={80} className={`mx-auto mb-8 ${darkMode ? 'text-gray-600' : 'text-gray-400'}`} />
