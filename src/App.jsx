@@ -46,6 +46,7 @@ export default function StudyFlow() {
   const [authShowPass, setAuthShowPass] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authValidating, setAuthValidating] = useState(false);
+  const [katexReady, setKatexReady] = useState(false);
 
   const tips = [
     { e: "🧠", t: "Erkläre das Gelernten mit eigenen Worten – das festigt dein Wissen!" },
@@ -61,6 +62,18 @@ export default function StudyFlow() {
   useEffect(() => {
     const i = setInterval(() => setTipIdx((p) => (p + 1) % tips.length), 5000);
     return () => clearInterval(i);
+  }, []);
+
+  useEffect(() => {
+    if (window.katex) { setKatexReady(true); return; }
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css";
+    document.head.appendChild(link);
+    const sc = document.createElement("script");
+    sc.src = "https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js";
+    sc.onload = () => setKatexReady(true);
+    document.head.appendChild(sc);
   }, []);
 
   useEffect(() => {
@@ -367,10 +380,11 @@ Sei motivierend und realistisch!`;
     t = t.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
     // 4. Convert strikethrough ~~text~~ → plain text
     t = t.replace(/~~([^~]+?)~~/g, "$1");
-    // 5. Remove stray | characters that aren't part of a table row
+    // 5. Remove stray | characters that aren't part of a table row (but never touch lines with math $)
     t = t.split("\n").map((line) => {
       const trimmed = line.trim();
       if (trimmed.startsWith("|") && trimmed.endsWith("|")) return line;
+      if (trimmed.includes("$")) return line;
       return line.replace(/\|/g, "");
     }).join("\n");
     // 6. Common HTML entities
@@ -384,11 +398,30 @@ Sei motivierend und realistisch!`;
     return t;
   };
 
+  const renderMath = (expr, displayMode, key) => {
+    try {
+      if (window.katex) {
+        const html = window.katex.renderToString(expr.trim(), { displayMode, throwOnError: false });
+        return <span key={key} dangerouslySetInnerHTML={{ __html: html }} className={displayMode ? "block overflow-x-auto py-1" : "inline"} />;
+      }
+    } catch (e) {}
+    return <code key={key} className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${dark ? "bg-gray-700 text-emerald-400" : "bg-gray-200 text-emerald-700"}`}>{expr}</code>;
+  };
+
   const renderInline = (text) => {
     // Split by patterns in priority order – includes links and strikethrough
-    const parts = text.split(/(```[\s\S]*?```|`[^`]+`|\*\*\*.*?\*\*\*|___.*?___|\[[^\]]*\]\([^)]*\)|~~[^~]+?~~|\*\*.*?\*\*|__.*?__|``.*?``|\*[^*\n]+?\*|_[^_\n]+?_)/g);
+    const parts = text.split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$|```[\s\S]*?```|`[^`]+`|\*\*\*.*?\*\*\*|___.*?___|\[[^\]]*\]\([^)]*\)|~~[^~]+?~~|\*\*.*?\*\*|__.*?__|``.*?``|\*[^*\n]+?\*|_[^_\n]+?_)/g);
     return parts.map((part, i) => {
       if (!part) return null;
+      // Display math $$...$$
+      if (part.startsWith("$$") && part.endsWith("$$") && part.length > 4) {
+        return renderMath(part.slice(2, -2), true, i);
+      }
+      // Inline math $...$  (only if it looks like LaTeX: contains \ ^ _ or {)
+      if (part.startsWith("$") && part.endsWith("$") && !part.startsWith("$$") && part.length > 2) {
+        const inner = part.slice(1, -1);
+        if (/[\\^_{]/.test(inner)) return renderMath(inner, false, i);
+      }
       // Inline code
       const codeMatch = part.match(/^``(.+)``$/) || part.match(/^`(.+)`$/);
       if (codeMatch) {
@@ -430,6 +463,8 @@ Sei motivierend und realistisch!`;
     let inCodeBlock = false;
     let codeLines = [];
     let codeLang = "";
+    let inMathBlock = false;
+    let mathLines = [];
     const output = [];
 
     for (let i = 0; i < lines.length; i++) {
@@ -456,6 +491,29 @@ Sei motivierend und realistisch!`;
         }
       }
       if (inCodeBlock) { codeLines.push(line); continue; }
+
+      // Multi-line math block: line is exactly $$
+      if (line.trim() === "$$") {
+        if (!inMathBlock) { inMathBlock = true; mathLines = []; continue; }
+        inMathBlock = false;
+        output.push(
+          <div key={`math-${i}`} className={`my-3 rounded-xl p-3 overflow-x-auto ${dark ? "bg-gray-800/60 border border-gray-700" : "bg-gray-50 border border-gray-200"}`}>
+            {renderMath(mathLines.join("\n"), true, `math-${i}`)}
+          </div>
+        );
+        continue;
+      }
+      if (inMathBlock) { mathLines.push(line); continue; }
+
+      // Single-line display math  $$...$$
+      if (line.trim().startsWith("$$") && line.trim().endsWith("$$") && line.trim().length > 4) {
+        output.push(
+          <div key={`math-${i}`} className={`my-3 rounded-xl p-3 overflow-x-auto ${dark ? "bg-gray-800/60 border border-gray-700" : "bg-gray-50 border border-gray-200"}`}>
+            {renderMath(line.trim().slice(2, -2).trim(), true, `math-${i}`)}
+          </div>
+        );
+        continue;
+      }
 
       // Horizontal rule ---
       if (/^---+$/.test(line.trim())) {
