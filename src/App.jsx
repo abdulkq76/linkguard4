@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Download, TrendingUp, Play, Pause, RotateCcw, AlertCircle, Target, Lightbulb, FileText, Upload, ArrowLeft, Trash2, LogOut, Eye, EyeOff, Mail, User, Lock } from "lucide-react";
+import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Download, TrendingUp, Play, Pause, RotateCcw, AlertCircle, Target, Lightbulb, FileText, Upload, ArrowLeft, Trash2, LogOut, Eye, EyeOff, Mail, User, Lock, Layers } from "lucide-react";
 
 const Card = ({ children, className = "", dark }) => (
   <div className={`rounded-2xl ${dark ? "bg-gray-800 border border-gray-700" : "bg-white shadow-sm border border-gray-100"} ${className}`}>{children}</div>
@@ -35,6 +35,20 @@ export default function StudyFlow() {
   const [activeEntry, setActiveEntry] = useState(null);
   const fileRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
+
+  // Flashcards
+  const [flashMode, setFlashMode] = useState("thema");
+  const [flashSubject, setFlashSubject] = useState("");
+  const [flashTopic, setFlashTopic] = useState("");
+  const [flashPdfs, setFlashPdfs] = useState([]);
+  const [flashSelectedHeft, setFlashSelectedHeft] = useState(null);
+  const [flashLoading, setFlashLoading] = useState(false);
+  const [flashSets, setFlashSets] = useState([]);
+  const [activeFlashSet, setActiveFlashSet] = useState(null);
+  const [flashCardIdx, setFlashCardIdx] = useState(0);
+  const [flashFlipped, setFlashFlipped] = useState(false);
+  const flashFileRef = useRef(null);
+  const [flashDragOver, setFlashDragOver] = useState(false);
 
   // Auth
   const [user, setUser] = useState(null);
@@ -87,6 +101,7 @@ export default function StudyFlow() {
       setAiResult(localStorage.getItem("sf_ai") || "");
       setChecked(load("sf_chk") || {});
       setHeftEntries(load("sf_heft") || []);
+      setFlashSets(load("sf_flash") || []);
       const session = load("sf_session");
       if (session) { setUser(session); setView("welcome"); }
     } catch (e) {}
@@ -100,6 +115,7 @@ export default function StudyFlow() {
   useEffect(() => { localStorage.setItem("sf_ai", aiResult); }, [aiResult]);
   useEffect(() => { localStorage.setItem("sf_chk", JSON.stringify(checked)); }, [checked]);
   useEffect(() => { localStorage.setItem("sf_heft", JSON.stringify(heftEntries)); }, [heftEntries]);
+  useEffect(() => { localStorage.setItem("sf_flash", JSON.stringify(flashSets)); }, [flashSets]);
 
   useEffect(() => {
     if (!tRun) return;
@@ -360,6 +376,92 @@ Sei motivierend und realistisch!`;
       alert("❌ " + e.message);
     } finally {
       setHeftLoading(false);
+    }
+  };
+
+
+  // ─── Flashcards ───
+  const handleFlashFile = (file) => {
+    if (!file || file.type !== "application/pdf") { alert("Bitte nur PDF-Dateien hochladen!"); return; }
+    if (flashPdfs.find((p) => p.name === file.name)) { alert("Diese PDF wurde bereits hinzugefügt!"); return; }
+    const reader = new FileReader();
+    reader.onload = (e) => setFlashPdfs((prev) => [...prev, { name: file.name, base64: e.target.result.split(",")[1] }]);
+    reader.readAsDataURL(file);
+  };
+  const handleFlashFiles = (files) => { Array.from(files).forEach((f) => handleFlashFile(f)); };
+
+  const generateFlashCards = async () => {
+    if (flashMode === "thema" && (!flashSubject.trim() || !flashTopic.trim())) { alert("Bitte Fach und Thema eingeben!"); return; }
+    if (flashMode === "pdf" && flashPdfs.length === 0) { alert("Bitte mindestens eine PDF hochladen!"); return; }
+    if (flashMode === "heft" && !flashSelectedHeft) { alert("Bitte einen Heftintrag auswählen!"); return; }
+    setFlashLoading(true);
+
+    try {
+      let parts = [];
+      const jsonInstruction = `\n\nWICHTIG: Antwort NUR mit einem reinen JSON-Array. Kein Markdown, keine Backticks, kein Text davor oder danach. Genau so:\n[\n  {"front":"Vorderseite","back":"Rückseite"},\n  ...\n]`;
+
+      if (flashMode === "thema") {
+        parts = [{ text: `Du bist ein Experte-Lehrer. Erstelle GENAU 12 Lernkarten (Flashcards) zum folgenden Thema.\n\nFach: ${flashSubject}\nThema: ${flashTopic}\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Vom Einfachen zum Schwierigen steigern\n- Wichtige Konzepte, Definitionen, Zusammenhänge abdecken${jsonInstruction}` }];
+      } else if (flashMode === "pdf") {
+        const pdfNames = flashPdfs.map((p) => p.name).join(", ");
+        const pdfParts = flashPdfs.map((p) => ({ inlineData: { mimeType: "application/pdf", data: p.base64 } }));
+        parts = [
+          ...pdfParts,
+          { text: `Du bist ein Experte-Lehrer. Es werden ${flashPdfs.length} PDF-Datei${flashPdfs.length > 1 ? "en" : ""} (${pdfNames}) mitgeteilt. Erstelle GENAU 12 Lernkarten aus dem Inhalt dieser Dokumente.\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Decke die wichtigsten Punkte aus ALLEN Dokumenten ab\n- Vom Einfachen zum Schwierigen steigern${jsonInstruction}` }
+        ];
+      } else {
+        // heft mode — use existing entry content
+        parts = [{ text: `Du bist ein Experte-Lehrer. Der folgende Text ist ein KI-generierter Heftintrag:\n\n---\n${flashSelectedHeft.content}\n---\n\nErstelle GENAU 12 Lernkarten basierend auf diesem Heftintrag.\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Decke die wichtigsten Konzepte aus dem Heftintrag ab\n- Vom Einfachen zum Schwierigen steigern${jsonInstruction}` }];
+      }
+
+      const r = await fetch("https://api.bennokahmann.me/ai/google/jill/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts }] }),
+      });
+      if (!r.ok) throw new Error(`Fehler ${r.status}`);
+      const data = await r.json();
+      let raw = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+      if (!raw.trim()) throw new Error("Keine Antwort von der KI");
+
+      // Strip markdown fences if present
+      raw = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
+      // Extract JSON array robustly: first [ to last ]
+      const arrStart = raw.indexOf("[");
+      const arrEnd = raw.lastIndexOf("]");
+      if (arrStart === -1 || arrEnd === -1 || arrEnd <= arrStart) throw new Error("Konnte keine Lernkarten parsen. Bitte versuche es noch einmal.");
+      const cards = JSON.parse(raw.slice(arrStart, arrEnd + 1));
+      if (!Array.isArray(cards) || cards.length === 0) throw new Error("Keine Lernkarten gefunden.");
+      const validCards = cards.filter((c) => c && typeof c.front === "string" && typeof c.back === "string" && c.front.trim() && c.back.trim());
+      if (validCards.length === 0) throw new Error("Keine gültigen Karten gefunden.");
+
+      const title = flashMode === "thema"
+        ? `${flashSubject} – ${flashTopic}`
+        : flashMode === "pdf"
+          ? flashPdfs.map((p) => p.name).join(", ")
+          : flashSelectedHeft.topic;
+
+      const newSet = {
+        id: Date.now(),
+        mode: flashMode,
+        title,
+        subject: flashMode === "thema" ? flashSubject : flashMode === "heft" ? flashSelectedHeft.subject : "",
+        cards: validCards.map((c, i) => ({ id: i, front: c.front || "", back: c.back || "" })),
+        date: today().str,
+      };
+      setFlashSets((prev) => [newSet, ...prev]);
+      setActiveFlashSet(newSet);
+      setFlashCardIdx(0);
+      setFlashFlipped(false);
+      setView("flash-card");
+      setFlashSubject("");
+      setFlashTopic("");
+      setFlashPdfs([]);
+      setFlashSelectedHeft(null);
+    } catch (e) {
+      alert("❌ " + e.message);
+    } finally {
+      setFlashLoading(false);
     }
   };
 
@@ -871,7 +973,7 @@ Sei motivierend und realistisch!`;
             </button>
             <div>
               <h1 className={`text-lg md:text-xl lg:text-2xl font-extrabold ${dark ? "text-white" : "text-gray-900"}`}>
-                {view === "ai" ? "✨ Dein Lernplan" : (view === "heft" || view === "heft-entry") ? "📓 Heftintrag" : "📚 Dashboard"}
+                {view === "ai" ? "✨ Dein Lernplan" : (view === "heft" || view === "heft-entry") ? "📓 Heftintrag" : (view === "flash" || view === "flash-card") ? "🃏 Lernkarten" : "📚 Dashboard"}
               </h1>
               <p className={`text-xs md:text-sm ${dark ? "text-gray-500" : "text-gray-400"}`}>{today().long}</p>
             </div>
@@ -880,11 +982,12 @@ Sei motivierend und realistisch!`;
             {[
               { id: "dashboard", label: "Dashboard", bg: "#4f46e5" },
               { id: "heft", label: "📓 Heft", bg: "#059669" },
+              { id: "flash", label: "🃏 Flash", bg: "#db2777" },
               ...(aiResult ? [{ id: "ai", label: "KI-Plan", bg: "#9333ea" }] : []),
             ].map((n) => {
-              const active = view === n.id || (view === "heft-entry" && n.id === "heft");
+              const active = view === n.id || (view === "heft-entry" && n.id === "heft") || (view === "flash-card" && n.id === "flash");
               return (
-                <button key={n.id} onClick={() => { setView(n.id); setActiveEntry(null); }} className={`px-3 md:px-4 py-1.5 rounded-xl text-xs md:text-sm font-bold transition-all ${active ? "text-white shadow-md" : dark ? "bg-gray-800 text-gray-300 hover:bg-gray-700" : "bg-white text-gray-600 hover:bg-gray-50 shadow-sm"}`} style={active ? { background: n.bg } : {}}>
+                <button key={n.id} onClick={() => { setView(n.id); setActiveEntry(null); setActiveFlashSet(null); }} className={`px-3 md:px-4 py-1.5 rounded-xl text-xs md:text-sm font-bold transition-all ${active ? "text-white shadow-md" : dark ? "bg-gray-800 text-gray-300 hover:bg-gray-700" : "bg-white text-gray-600 hover:bg-gray-50 shadow-sm"}`} style={active ? { background: n.bg } : {}}>
                   {n.label}
                 </button>
               );
@@ -1281,6 +1384,286 @@ Sei motivierend und realistisch!`;
             )}
           </div>
         )}
+
+        {/* ===== FLASH VIEW ===== */}
+        {(view === "flash" || view === "flash-card") && (
+          <div className="max-w-3xl mx-auto">
+
+            {/* ── Flash Card Viewer ── */}
+            {view === "flash-card" && activeFlashSet && (
+              <div>
+                <button onClick={() => { setView("flash"); setActiveFlashSet(null); }} className={`flex items-center gap-2 mb-4 text-xs md:text-sm font-bold transition-all hover:opacity-70 ${dark ? "text-pink-400" : "text-pink-600"}`}>
+                  <ArrowLeft size={16} /> Zurück zur Liste
+                </button>
+
+                {/* Header */}
+                <div className={`rounded-2xl p-4 md:p-5 mb-4 ${dark ? "bg-gray-800 border border-gray-700" : "bg-white border border-gray-200 shadow-sm"}`}>
+                  <div className="flex justify-between items-start">
+                    <div>
+                      {activeFlashSet.subject && (
+                        <span className={`inline-block text-xs font-bold px-2.5 py-1 rounded-full mb-1.5 ${dark ? "bg-pink-900 text-pink-300" : "bg-pink-100 text-pink-700"}`}>
+                          📚 {activeFlashSet.subject}
+                        </span>
+                      )}
+                      <h2 className={`text-base md:text-lg font-extrabold ${dark ? "text-white" : "text-gray-900"}`}>{activeFlashSet.title}</h2>
+                      <p className={`text-xs mt-0.5 ${dark ? "text-gray-500" : "text-gray-400"}`}>Erstellt am {activeFlashSet.date} · {activeFlashSet.cards.length} Karten</p>
+                    </div>
+                    <button onClick={() => { setFlashSets(flashSets.filter((s) => s.id !== activeFlashSet.id)); setView("flash"); setActiveFlashSet(null); }} className="text-red-400 hover:text-red-500 transition-all"><Trash2 size={18} /></button>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div className="mt-3">
+                    <div className="flex justify-between items-center mb-1">
+                      <span className={`text-xs font-semibold ${dark ? "text-gray-400" : "text-gray-500"}`}>Karte {flashCardIdx + 1} von {activeFlashSet.cards.length}</span>
+                      <span className={`text-xs font-bold ${dark ? "text-pink-400" : "text-pink-600"}`}>{Math.round(((flashCardIdx + 1) / activeFlashSet.cards.length) * 100)}%</span>
+                    </div>
+                    <div className={`h-2 rounded-full overflow-hidden ${dark ? "bg-gray-700" : "bg-gray-200"}`}>
+                      <div className="h-full rounded-full bg-gradient-to-r from-pink-500 to-rose-500 transition-all duration-500" style={{ width: `${((flashCardIdx + 1) / activeFlashSet.cards.length) * 100}%` }} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Flip Card */}
+                <div className="flex justify-center mb-5" style={{ perspective: "1200px" }}>
+                  <div
+                    onClick={() => setFlashFlipped(!flashFlipped)}
+                    className="w-full max-w-lg cursor-pointer"
+                    style={{ transformStyle: "preserve-3d", transition: "transform 0.5s cubic-bezier(0.4,0.2,0.2,1)", transform: flashFlipped ? "rotateY(180deg)" : "rotateY(0deg)", minHeight: "260px" }}
+                  >
+                    {/* Front */}
+                    <div
+                      className={`absolute inset-0 rounded-2xl p-6 md:p-8 flex flex-col justify-between shadow-lg border ${dark ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"}`}
+                      style={{ backfaceVisibility: "hidden" }}
+                    >
+                      <div className="flex justify-between items-center">
+                        <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${dark ? "bg-pink-900/50 text-pink-300" : "bg-pink-100 text-pink-700"}`}>❓ Frage</span>
+                        <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>Klick zum Umdrehen</span>
+                      </div>
+                      <div className="flex-1 flex items-center justify-center py-4">
+                        <p className={`text-center text-base md:text-lg font-semibold leading-relaxed ${dark ? "text-white" : "text-gray-900"}`}>
+                          {activeFlashSet.cards[flashCardIdx]?.front}
+                        </p>
+                      </div>
+                      <div className="flex justify-center">
+                        <div className={`w-12 h-1 rounded-full ${dark ? "bg-gray-700" : "bg-gray-200"}`} />
+                      </div>
+                    </div>
+
+                    {/* Back */}
+                    <div
+                      className={`absolute inset-0 rounded-2xl p-6 md:p-8 flex flex-col justify-between shadow-lg border ${dark ? "bg-gradient-to-br from-pink-900/30 to-rose-900/30 border-pink-800" : "bg-gradient-to-br from-pink-50 to-rose-50 border-pink-200"}`}
+                      style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
+                    >
+                      <div className="flex justify-between items-center">
+                        <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${dark ? "bg-emerald-900/50 text-emerald-300" : "bg-emerald-100 text-emerald-700"}`}>✅ Antwort</span>
+                        <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>Klick zum Umdrehen</span>
+                      </div>
+                      <div className="flex-1 flex items-center justify-center py-4">
+                        <p className={`text-center text-sm md:text-base leading-relaxed ${dark ? "text-gray-200" : "text-gray-700"}`}>
+                          {activeFlashSet.cards[flashCardIdx]?.back}
+                        </p>
+                      </div>
+                      <div className="flex justify-center">
+                        <div className={`w-12 h-1 rounded-full ${dark ? "bg-pink-800" : "bg-pink-200"}`} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Navigation */}
+                <div className="flex justify-center items-center gap-3 mb-4">
+                  <button
+                    onClick={() => { if (flashCardIdx > 0) { setFlashCardIdx(flashCardIdx - 1); setFlashFlipped(false); } }}
+                    disabled={flashCardIdx === 0}
+                    className={`px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm transition-all flex items-center gap-2 ${flashCardIdx === 0 ? "opacity-30 cursor-not-allowed" : "hover:scale-105"} ${dark ? "bg-gray-800 text-white border border-gray-700" : "bg-white text-gray-700 border border-gray-200 shadow-sm"}`}
+                  >
+                    <ArrowLeft size={15} /> Vorher
+                  </button>
+
+                  {flashCardIdx === activeFlashSet.cards.length - 1 ? (
+                    <button
+                      onClick={() => { setFlashCardIdx(0); setFlashFlipped(false); }}
+                      className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2"
+                    >
+                      <RotateCcw size={15} /> Neu anfangen
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => { setFlashCardIdx(flashCardIdx + 1); setFlashFlipped(false); }}
+                      className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2"
+                    >
+                      Nächste <ChevronRight size={15} />
+                    </button>
+                  )}
+                </div>
+
+                {/* Card dots */}
+                <div className="flex justify-center gap-1.5 flex-wrap max-w-md mx-auto">
+                  {activeFlashSet.cards.map((_, i) => (
+                    <button key={i} onClick={() => { setFlashCardIdx(i); setFlashFlipped(false); }} className={`rounded-full transition-all ${i === flashCardIdx ? "w-4 h-2.5 bg-pink-500" : i < flashCardIdx ? `h-2.5 w-2.5 ${dark ? "bg-pink-800" : "bg-pink-300"}` : `h-2.5 w-2.5 ${dark ? "bg-gray-700" : "bg-gray-300"}`}`} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── Flash Main (generate + list) ── */}
+            {view === "flash" && (
+              <div>
+                <Card dark={dark} className="p-4 md:p-5 mb-4">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-pink-500 to-rose-600 flex items-center justify-center shadow-sm">
+                      <span className="text-white text-lg">🃏</span>
+                    </div>
+                    <div>
+                      <h2 className={`text-sm md:text-base font-extrabold ${dark ? "text-white" : "text-gray-900"}`}>Neue Lernkarten</h2>
+                      <p className={`text-xs ${dark ? "text-gray-400" : "text-gray-500"}`}>KI erstellt Flashcards aus Thema, PDF oder Heftintrag</p>
+                    </div>
+                  </div>
+
+                  {/* Mode Toggle – 3 options */}
+                  <div className={`flex gap-1 p-1 rounded-lg mb-4 ${dark ? "bg-gray-700" : "bg-gray-100"}`}>
+                    {[
+                      { id: "thema", label: "📚 Thema" },
+                      { id: "pdf", label: "📄 PDF" },
+                      { id: "heft", label: "📓 Heftintrag" },
+                    ].map((m) => (
+                      <button key={m.id} onClick={() => { setFlashMode(m.id); setFlashPdfs([]); setFlashSelectedHeft(null); }} className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${flashMode === m.id ? "bg-pink-600 text-white shadow-sm" : dark ? "text-gray-300 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* ── Thema Inputs ── */}
+                  {flashMode === "thema" && (
+                    <div className="space-y-2.5">
+                      <div>
+                        <label className={`text-xs font-semibold ${dark ? "text-gray-400" : "text-gray-500"}`}>Fach</label>
+                        <input value={flashSubject} onChange={(e) => setFlashSubject(e.target.value)} placeholder="z.B. Biologie" className={`w-full mt-1 px-3 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-pink-500 ${dark ? "bg-gray-700 border-gray-600 text-white placeholder-gray-500" : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400"}`} />
+                      </div>
+                      <div>
+                        <label className={`text-xs font-semibold ${dark ? "text-gray-400" : "text-gray-500"}`}>Thema</label>
+                        <input value={flashTopic} onChange={(e) => setFlashTopic(e.target.value)} placeholder="z.B. Photosynthese" className={`w-full mt-1 px-3 py-2 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-pink-500 ${dark ? "bg-gray-700 border-gray-600 text-white placeholder-gray-500" : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400"}`} />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── PDF Drop ── */}
+                  {flashMode === "pdf" && (
+                    <div>
+                      <input ref={flashFileRef} type="file" accept=".pdf" multiple className="hidden" onChange={(e) => { handleFlashFiles(e.target.files); e.target.value = ""; }} />
+                      <div
+                        onDragOver={(e) => { e.preventDefault(); setFlashDragOver(true); }}
+                        onDragLeave={() => setFlashDragOver(false)}
+                        onDrop={(e) => { e.preventDefault(); setFlashDragOver(false); handleFlashFiles(e.dataTransfer.files); }}
+                        onClick={() => flashFileRef.current?.click()}
+                        className={`border-2 border-dashed rounded-xl p-5 md:p-7 text-center cursor-pointer transition-all hover:scale-[1.01] ${
+                          flashDragOver
+                            ? (dark ? "border-pink-500 bg-pink-900/20" : "border-pink-500 bg-pink-50")
+                            : (dark ? "border-gray-600 hover:border-gray-500" : "border-gray-300 hover:border-gray-400")
+                        }`}
+                      >
+                        <div className={`w-11 h-11 rounded-xl mx-auto mb-2 flex items-center justify-center ${dark ? "bg-gray-700" : "bg-gray-100"}`}>
+                          <Upload size={22} className={dark ? "text-gray-400" : "text-gray-500"} />
+                        </div>
+                        <p className={`text-sm font-semibold ${dark ? "text-gray-300" : "text-gray-700"}`}>
+                          {flashPdfs.length === 0 ? "PDF hier ablegen oder klicken" : "+ Weitere PDFs hinzufügen"}
+                        </p>
+                        <p className={`text-xs mt-0.5 ${dark ? "text-gray-500" : "text-gray-400"}`}>Mehrere Dateien erlaubt</p>
+                      </div>
+                      {flashPdfs.length > 0 && (
+                        <div className="mt-2.5 space-y-1.5">
+                          {flashPdfs.map((pdf, idx) => (
+                            <div key={idx} className={`flex items-center justify-between px-3 py-2 rounded-lg ${dark ? "bg-pink-900/20 border border-pink-800" : "bg-pink-50 border border-pink-200"}`}>
+                              <div className="flex items-center gap-2.5 min-w-0">
+                                <div className="w-7 h-7 rounded-md bg-pink-500 flex items-center justify-center flex-shrink-0"><FileText size={14} className="text-white" /></div>
+                                <p className={`text-xs font-bold truncate ${dark ? "text-white" : "text-gray-900"}`}>{pdf.name}</p>
+                              </div>
+                              <button onClick={() => setFlashPdfs(flashPdfs.filter((_, j) => j !== idx))} className="text-red-400 hover:text-red-500 transition-all flex-shrink-0"><X size={15} /></button>
+                            </div>
+                          ))}
+                          <p className={`text-xs text-center pt-1 ${dark ? "text-pink-400" : "text-pink-600"}`}>{flashPdfs.length} PDF{flashPdfs.length > 1 ? "s" : ""} geladen ✓</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* ── Heftintrag Picker ── */}
+                  {flashMode === "heft" && (
+                    <div>
+                      {heftEntries.length === 0 ? (
+                        <div className={`rounded-xl p-5 text-center border-2 border-dashed ${dark ? "border-gray-600 bg-gray-800/40" : "border-gray-300 bg-gray-50"}`}>
+                          <p className={`text-sm font-semibold mb-1 ${dark ? "text-gray-400" : "text-gray-500"}`}>Keine Hefteinträge vorhanden</p>
+                          <p className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>Erstelle erst einen Heftintrag im Heft-Reiter</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <label className={`text-xs font-semibold ${dark ? "text-gray-400" : "text-gray-500"}`}>Heftintrag auswählen</label>
+                          <div className="space-y-1.5 mt-1">
+                            {heftEntries.map((entry) => {
+                              const selected = flashSelectedHeft?.id === entry.id;
+                              return (
+                                <button key={entry.id} onClick={() => setFlashSelectedHeft(selected ? null : entry)} className={`w-full text-left p-3 rounded-xl border transition-all hover:scale-[1.01] ${
+                                  selected
+                                    ? (dark ? "bg-pink-900/30 border-pink-600 ring-2 ring-pink-600" : "bg-pink-50 border-pink-400 ring-2 ring-pink-400")
+                                    : (dark ? "bg-gray-800/60 border-gray-700 hover:border-gray-600" : "bg-white border-gray-200 hover:border-gray-300 shadow-sm")
+                                }`}>
+                                  <div className="flex justify-between items-center">
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2 mb-0.5">
+                                        <span className={`text-xs px-2 py-0.5 rounded-full ${selected ? (dark ? "bg-pink-800 text-pink-200" : "bg-pink-200 text-pink-800") : (dark ? "bg-emerald-900 text-emerald-300" : "bg-emerald-100 text-emerald-700")}`}>
+                                          {entry.mode === "pdf" ? "📄 PDF" : `📚 ${entry.subject}`}
+                                        </span>
+                                        <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>{entry.date}</span>
+                                      </div>
+                                      <p className={`font-bold text-sm truncate ${dark ? "text-white" : "text-gray-900"}`}>{entry.topic}</p>
+                                    </div>
+                                    {selected && <span className="text-pink-500 text-sm">✓</span>}
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Generate Button */}
+                  <button onClick={generateFlashCards} disabled={flashLoading || (flashMode === "heft" && heftEntries.length === 0)} className={`w-full mt-4 py-3 rounded-lg font-bold text-xs md:text-sm transition-all flex items-center justify-center gap-2 ${(flashLoading || (flashMode === "heft" && heftEntries.length === 0)) ? "bg-gray-400 text-gray-200 cursor-not-allowed" : "bg-gradient-to-r from-pink-600 to-rose-600 text-white hover:shadow-lg hover:scale-[1.02] shadow-md"}`}>
+                    {flashLoading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Erstelle Lernkarten...</> : <><Sparkles size={16} /> Lernkarten erstellen</>}
+                  </button>
+                </Card>
+
+                {/* ── Saved Sets List ── */}
+                {flashSets.length > 0 && (
+                  <div>
+                    <h3 className={`text-xs md:text-sm font-extrabold mb-2.5 uppercase tracking-wider ${dark ? "text-gray-400" : "text-gray-500"}`}>🃏 Deine Lernkarten-Sets</h3>
+                    <div className="space-y-2">
+                      {flashSets.map((set) => (
+                        <button key={set.id} onClick={() => { setActiveFlashSet(set); setFlashCardIdx(0); setFlashFlipped(false); setView("flash-card"); }} className={`group w-full text-left p-3 md:p-4 rounded-xl border transition-all hover:scale-[1.02] ${dark ? "bg-gray-800 border-gray-700 hover:border-pink-600" : "bg-white border-gray-200 hover:border-pink-300 shadow-sm"}`}>
+                          <div className="flex justify-between items-center">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 mb-0.5">
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${dark ? "bg-pink-900 text-pink-300" : "bg-pink-100 text-pink-700"}`}>
+                                  {set.mode === "pdf" ? "📄 PDF" : set.mode === "heft" ? "📓 Heft" : `📚 ${set.subject}`}
+                                </span>
+                                <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>{set.date}</span>
+                                <span className={`text-xs font-bold ${dark ? "text-pink-400" : "text-pink-600"}`}>{set.cards.length} Karten</span>
+                              </div>
+                              <p className={`font-bold text-sm truncate ${dark ? "text-white" : "text-gray-900"}`}>{set.title}</p>
+                            </div>
+                            <ChevronRight size={16} className={`flex-shrink-0 transition-transform group-hover:translate-x-1 ${dark ? "text-gray-500" : "text-gray-400"}`} />
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
       </div>
       <style>{`
           * { box-sizing: border-box; }
