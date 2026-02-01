@@ -621,7 +621,7 @@ Sei motivierend und realistisch!`;
   // ===== AUTH SCREEN =====
   if (view === "auth") {
     return (
-      <div className={`min-h-screen relative overflow-hidden ${dark ? "bg-gray-950" : "bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50"}`}>
+      <div className={`w-full min-h-screen relative overflow-hidden ${dark ? "bg-gray-950" : "bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50"}`}>
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <div className={`absolute -top-32 -left-32 w-96 h-96 rounded-full blur-3xl ${dark ? "bg-purple-600 opacity-20" : "bg-purple-400 opacity-30"}`} style={{ animation: "blob1 8s ease-in-out infinite" }} />
           <div className={`absolute top-1/2 -right-32 w-80 h-80 rounded-full blur-3xl ${dark ? "bg-blue-600 opacity-15" : "bg-blue-400 opacity-25"}`} style={{ animation: "blob2 10s ease-in-out infinite 2s" }} />
@@ -743,7 +743,7 @@ Sei motivierend und realistisch!`;
   // ===== WELCOME =====
   if (view === "welcome") {
     return (
-      <div className={`min-h-screen relative overflow-hidden ${dark ? "bg-gray-950" : "bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50"}`}>
+      <div className={`w-full min-h-screen relative overflow-hidden ${dark ? "bg-gray-950" : "bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50"}`}>
         <div className="absolute inset-0 pointer-events-none overflow-hidden">
           <div className={`absolute -top-32 -left-32 w-96 h-96 rounded-full blur-3xl ${dark ? "bg-purple-600 opacity-20" : "bg-purple-400 opacity-30"}`} style={{ animation: "blob1 8s ease-in-out infinite" }} />
           <div className={`absolute top-1/2 -right-32 w-80 h-80 rounded-full blur-3xl ${dark ? "bg-blue-600 opacity-15" : "bg-blue-400 opacity-25"}`} style={{ animation: "blob2 10s ease-in-out infinite 2s" }} />
@@ -792,7 +792,7 @@ Sei motivierend und realistisch!`;
 
   // ===== APP SHELL =====
   return (
-    <div className={`min-h-screen ${dark ? "bg-gray-950" : "bg-gray-100"} transition-colors duration-500`}>
+    <div className={`w-full min-h-screen ${dark ? "bg-gray-950" : "bg-gray-100"} transition-colors duration-500`}>
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className={`absolute -top-48 -right-48 w-96 h-96 rounded-full blur-3xl ${dark ? "bg-purple-600 opacity-10" : "bg-indigo-400 opacity-10"}`} />
         <div className={`absolute -bottom-48 -left-48 w-80 h-80 rounded-full blur-3xl ${dark ? "bg-pink-600 opacity-8" : "bg-pink-400 opacity-10"}`} />
