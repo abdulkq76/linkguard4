@@ -254,6 +254,62 @@ export default function StudyFlow() {
     setAddingTest(false);
   };
 
+  // Helper to show user-friendly error messages
+  const showError = (error) => {
+    let msg = "❌ " + error.message;
+    if (error.message.includes("429") || error.message.toLowerCase().includes("rate limit")) {
+      msg = "⏱️ API-Limit erreicht. Das System macht gerade zu viele Anfragen.\n\n💡 Tipp: Warte 15-30 Sekunden und versuche es dann erneut.";
+    } else if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError") || error.message.includes("Maximale Anzahl")) {
+      msg = "🌐 Verbindungsfehler zur KI.\n\n💡 Lösungen:\n• Prüfe deine Internetverbindung\n• Versuche es in 10-15 Sekunden erneut\n• Lade die Seite neu (F5)";
+    } else if (error.message.match(/50[0-9]/)) {
+      msg = "⚠️ KI-Server vorübergehend überlastet.\n\n💡 Tipp: Warte 15-30 Sekunden und versuche es erneut.";
+    } else if (error.message.includes("JSON") || error.message.includes("parse")) {
+      msg = "🔧 Fehler beim Verarbeiten der KI-Antwort.\n\n💡 Tipp: Versuche es nochmal - manchmal hilft ein zweiter Versuch.";
+    } else if (error.message.includes("Keine Antwort") || error.message.includes("keine Karten") || error.message.includes("nicht gefunden")) {
+      msg = "⚠️ " + error.message + "\n\n💡 Tipp: Versuche es erneut oder formuliere deine Anfrage anders.";
+    }
+    alert(msg);
+  };
+
+  // Retry helper with exponential backoff for API calls
+  const fetchWithRetry = async (url, options, maxRetries = 3) => {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const response = await fetch(url, options);
+        
+        // If rate limited (429), wait longer before retry
+        if (response.status === 429) {
+          const waitTime = Math.min(2000 * Math.pow(2, attempt), 15000); // 2s, 4s, 8s, max 15s
+          console.log(`⏱️ Rate limited. Warte ${waitTime / 1000}s vor erneutem Versuch...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue;
+        }
+        
+        // If server error (5xx), retry
+        if (response.status >= 500 && response.status < 600) {
+          if (attempt < maxRetries - 1) {
+            const waitTime = 1500 * Math.pow(2, attempt); // 1.5s, 3s, 6s
+            console.log(`⚠️ Server Fehler ${response.status}. Warte ${waitTime / 1000}s...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            continue;
+          }
+        }
+        
+        return response;
+      } catch (error) {
+        // Network error (failed to fetch)
+        if (attempt < maxRetries - 1) {
+          const waitTime = 1500 * Math.pow(2, attempt); // 1.5s, 3s, 6s
+          console.log(`🌐 Netzwerkfehler. Versuch ${attempt + 1}/${maxRetries}. Warte ${waitTime / 1000}s...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error("Maximale Anzahl an Versuchen erreicht");
+  };
+
   const generate = async () => {
     setLoading(true);
     setAiResult("");
@@ -299,7 +355,7 @@ FORMAT (bitte genau so):
 Sei motivierend und realistisch!`;
 
     try {
-      const r = await fetch("https://api.bennokahmann.me/ai/google/jill/", {
+      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
@@ -311,7 +367,7 @@ Sei motivierend und realistisch!`;
       setAiResult(text);
       setView("ai");
     } catch (e) {
-      alert("❌ " + e.message);
+      showError(e);
     } finally {
       setLoading(false);
     }
@@ -348,7 +404,7 @@ Sei motivierend und realistisch!`;
         ];
       }
 
-      const r = await fetch("https://api.bennokahmann.me/ai/google/jill/", {
+      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contents: [{ parts }] }),
@@ -373,7 +429,7 @@ Sei motivierend und realistisch!`;
       setHeftTopic("");
       setHeftPdfs([]);
     } catch (e) {
-      alert("❌ " + e.message);
+      showError(e);
     } finally {
       setHeftLoading(false);
     }
@@ -414,7 +470,7 @@ Sei motivierend und realistisch!`;
         parts = [{ text: `Du bist ein Experte-Lehrer. Der folgende Text ist ein KI-generierter Heftintrag:\n\n---\n${flashSelectedHeft.content}\n---\n\nErstelle GENAU 12 Lernkarten basierend auf diesem Heftintrag.\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Decke die wichtigsten Konzepte aus dem Heftintrag ab\n- Vom Einfachen zum Schwierigen steigern${jsonInstruction}` }];
       }
 
-      const r = await fetch("https://api.bennokahmann.me/ai/google/jill/", {
+      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ contents: [{ parts }] }),
@@ -459,7 +515,7 @@ Sei motivierend und realistisch!`;
       setFlashPdfs([]);
       setFlashSelectedHeft(null);
     } catch (e) {
-      alert("❌ " + e.message);
+      showError(e);
     } finally {
       setFlashLoading(false);
     }
