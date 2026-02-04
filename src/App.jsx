@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef } from "react";
-import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Download, TrendingUp, Play, Pause, RotateCcw, AlertCircle, Target, Lightbulb, FileText, Upload, ArrowLeft, Trash2, LogOut, Eye, EyeOff, Mail, User, Lock, Layers } from "lucide-react";
+import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Download, TrendingUp, Play, Pause, RotateCcw, AlertCircle, Target, Lightbulb, FileText, Upload, ArrowLeft, Trash2, LogOut, Eye, EyeOff, Mail, User, Lock, Layers, Send } from "lucide-react";
 
 const Card = ({ children, className = "", dark }) => (
   <div className={`rounded-2xl ${dark ? "bg-gray-800 border border-gray-700" : "bg-white shadow-sm border border-gray-100"} ${className}`}>{children}</div>
 );
 
 export default function StudyFlow() {
+  const OLD_API = "https://api.bennokahmann.me/ai/google/jill/";
+  const NEW_API = "https://api.bennokahmann.me/ai/nvidia/jill/";
+
   const [view, setView] = useState("auth");
   const [dark, setDark] = useState(false);
   const [subjects, setSubjects] = useState([]);
@@ -49,6 +52,14 @@ export default function StudyFlow() {
   const [flashFlipped, setFlashFlipped] = useState(false);
   const flashFileRef = useRef(null);
   const [flashDragOver, setFlashDragOver] = useState(false);
+  const [apiStatus, setApiStatus] = useState("");
+
+  // AI Tutor Chat
+  const [tutorMessages, setTutorMessages] = useState([]);
+  const [tutorInput, setTutorInput] = useState("");
+  const [tutorLoading, setTutorLoading] = useState(false);
+  const [tutorCooldown, setTutorCooldown] = useState(0);
+  const tutorChatRef = useRef(null);
 
   // Auth
   const [user, setUser] = useState(null);
@@ -102,6 +113,7 @@ export default function StudyFlow() {
       setChecked(load("sf_chk") || {});
       setHeftEntries(load("sf_heft") || []);
       setFlashSets(load("sf_flash") || []);
+      setTutorMessages(load("sf_tutor") || []);
       const session = load("sf_session");
       if (session) { setUser(session); setView("welcome"); }
     } catch (e) {}
@@ -116,6 +128,26 @@ export default function StudyFlow() {
   useEffect(() => { localStorage.setItem("sf_chk", JSON.stringify(checked)); }, [checked]);
   useEffect(() => { localStorage.setItem("sf_heft", JSON.stringify(heftEntries)); }, [heftEntries]);
   useEffect(() => { localStorage.setItem("sf_flash", JSON.stringify(flashSets)); }, [flashSets]);
+  useEffect(() => { localStorage.setItem("sf_tutor", JSON.stringify(tutorMessages)); }, [tutorMessages]);
+
+  // Tutor cooldown timer
+  useEffect(() => {
+    if (tutorCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setTutorCooldown((prev) => {
+        if (prev <= 1) { clearInterval(timer); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [tutorCooldown]);
+
+  // Tutor chat auto-scroll
+  useEffect(() => {
+    if (view === "tutor" && tutorChatRef.current) {
+      tutorChatRef.current.scrollTop = tutorChatRef.current.scrollHeight;
+    }
+  }, [tutorMessages, tutorLoading, view]);
 
   useEffect(() => {
     if (!tRun) return;
@@ -256,6 +288,7 @@ export default function StudyFlow() {
 
   // Helper to show user-friendly error messages
   const showError = (error) => {
+    setApiStatus("");
     let msg = "❌ " + error.message;
     if (error.message.includes("429") || error.message.toLowerCase().includes("rate limit")) {
       msg = "⏱️ API-Limit erreicht. Das System macht gerade zu viele Anfragen.\n\n💡 Tipp: Warte 15-30 Sekunden und versuche es dann erneut.";
@@ -271,47 +304,150 @@ export default function StudyFlow() {
     alert(msg);
   };
 
-  // Retry helper with exponential backoff for API calls
-  const fetchWithRetry = async (url, options, maxRetries = 3) => {
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const response = await fetch(url, options);
-        
-        // If rate limited (429), wait longer before retry
-        if (response.status === 429) {
-          const waitTime = Math.min(2000 * Math.pow(2, attempt), 15000); // 2s, 4s, 8s, max 15s
-          console.log(`⏱️ Rate limited. Warte ${waitTime / 1000}s vor erneutem Versuch...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          continue;
-        }
-        
-        // If server error (5xx), retry
-        if (response.status >= 500 && response.status < 600) {
-          if (attempt < maxRetries - 1) {
-            const waitTime = 1500 * Math.pow(2, attempt); // 1.5s, 3s, 6s
-            console.log(`⚠️ Server Fehler ${response.status}. Warte ${waitTime / 1000}s...`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
+  // Retry helper – liest Retry-After Header, zeigt live-Status, bis zu 5 Versuche pro URL
+  const fetchWithRetry = async (urls, options, maxRetries = 5) => {
+    const urlList = Array.isArray(urls) ? urls : [urls];
+
+    for (let u = 0; u < urlList.length; u++) {
+      const url = urlList[u];
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          if (attempt > 0) setApiStatus(`Versuch ${attempt + 1}/${maxRetries}…`);
+          const response = await fetch(url, options);
+
+          // 429 – Rate Limit
+          if (response.status === 429) {
+            let waitSec = 5 * Math.pow(2, attempt); // 5 / 10 / 20 / 40 / 80 → cap 60
+            if (waitSec > 60) waitSec = 60;
+            // Retry-After Header überschreibt ggf.
+            const ra = response.headers?.get?.("Retry-After");
+            if (ra) {
+              const parsed = parseInt(ra, 10);
+              if (!isNaN(parsed) && parsed > 0) waitSec = Math.min(parsed, 120);
+            }
+            setApiStatus(`⏳ Rate-Limit – warte ${waitSec}s…`);
+            await new Promise((r) => setTimeout(r, waitSec * 1000));
             continue;
           }
+
+          // 5xx – Server-Fehler
+          if (response.status >= 500 && response.status < 600) {
+            if (attempt < maxRetries - 1) {
+              const waitSec = 2 * Math.pow(2, attempt);
+              setApiStatus(`⚠️ Server-Fehler – warte ${waitSec}s…`);
+              await new Promise((r) => setTimeout(r, waitSec * 1000));
+              continue;
+            }
+            break; // zum nächsten URL wechseln
+          }
+
+          setApiStatus("");
+          return response; // ✓
+        } catch (networkErr) {
+          // Failed to fetch / Network-Fehler
+          if (attempt < maxRetries - 1) {
+            const waitSec = 2 * Math.pow(2, attempt);
+            setApiStatus(`🌐 Verbindungsfehler – warte ${waitSec}s…`);
+            await new Promise((r) => setTimeout(r, waitSec * 1000));
+            continue;
+          }
+          break;
         }
-        
-        return response;
-      } catch (error) {
-        // Network error (failed to fetch)
-        if (attempt < maxRetries - 1) {
-          const waitTime = 1500 * Math.pow(2, attempt); // 1.5s, 3s, 6s
-          console.log(`🌐 Netzwerkfehler. Versuch ${attempt + 1}/${maxRetries}. Warte ${waitTime / 1000}s...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          continue;
-        }
-        throw error;
+      }
+      // URL erschöpft → nächste URL
+      if (u < urlList.length - 1) {
+        setApiStatus("🔄 Wechsel zum Backup-Server…");
+        await new Promise((r) => setTimeout(r, 500));
       }
     }
+    setApiStatus("");
     throw new Error("Maximale Anzahl an Versuchen erreicht");
+  };
+
+  // Universal AI call - tries Nvidia (messages) then Google (contents) format
+  const callAI = async (prompt) => {
+    let reply;
+    
+    // Try Nvidia first (OpenAI-style messages)
+    try {
+      setApiStatus("Nvidia API...");
+      const r = await fetchWithRetry(NEW_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }] }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        reply = data.choices?.[0]?.message?.content || data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+        if (reply && reply.trim()) {
+          setApiStatus("");
+          return reply;
+        }
+      }
+    } catch (err) {
+      console.log("Nvidia failed:", err.message);
+    }
+
+    // Fallback to Google (Gemini-style contents)
+    setApiStatus("Google API...");
+    const r = await fetchWithRetry(OLD_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+    });
+    if (!r.ok) throw new Error(`Fehler ${r.status}`);
+    const data = await r.json();
+    reply = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+    if (!reply || !reply.trim()) throw new Error("Keine Antwort von der KI");
+    
+    setApiStatus("");
+    return reply;
+  };
+
+  // Universal AI call with PDFs - tries Nvidia then Google
+  const callAIWithPDFs = async (pdfParts, textPrompt) => {
+    let reply;
+
+    // Try Nvidia first - but Nvidia might not support PDFs well, so we try Google primarily
+    // For PDFs, Google Gemini is better, so we reverse priority
+    setApiStatus("Google API (PDF)...");
+    try {
+      const r = await fetchWithRetry(OLD_API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [...pdfParts, { text: textPrompt }] }] }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        reply = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+        if (reply && reply.trim()) {
+          setApiStatus("");
+          return reply;
+        }
+      }
+    } catch (err) {
+      console.log("Google PDF failed:", err.message);
+    }
+
+    // Nvidia fallback (might not work well with PDFs)
+    setApiStatus("Nvidia API (PDF)...");
+    const r = await fetchWithRetry(NEW_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contents: [{ parts: [...pdfParts, { text: textPrompt }] }] }),
+    });
+    if (!r.ok) throw new Error(`Fehler ${r.status}`);
+    const data = await r.json();
+    reply = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || data.choices?.[0]?.message?.content || "";
+    if (!reply || !reply.trim()) throw new Error("Keine Antwort von der KI");
+    
+    setApiStatus("");
+    return reply;
   };
 
   const generate = async () => {
     setLoading(true);
+    setApiStatus("");
     setAiResult("");
     setChecked({});
     const t = today();
@@ -355,15 +491,7 @@ FORMAT (bitte genau so):
 Sei motivierend und realistisch!`;
 
     try {
-      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-      });
-      if (!r.ok) throw new Error(`Fehler ${r.status}`);
-      const data = await r.json();
-      const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
-      if (!text.trim()) throw new Error("Keine Antwort von der KI");
+      const text = await callAI(prompt);
       setAiResult(text);
       setView("ai");
     } catch (e) {
@@ -390,29 +518,81 @@ Sei motivierend und realistisch!`;
     if (heftMode === "thema" && (!heftSubject.trim() || !heftTopic.trim())) { alert("Bitte Fach und Thema eingeben!"); return; }
     if (heftMode === "pdf" && heftPdfs.length === 0) { alert("Bitte mindestens eine PDF-Datei hochladen!"); return; }
     setHeftLoading(true);
+    setApiStatus("");
 
     try {
-      let parts = [];
+      let text;
+      
       if (heftMode === "thema") {
-        parts = [{ text: `Du bist ein brillanter Lehrer für Schüler und Studenten.\n\nFach: ${heftSubject}\nThema: ${heftTopic}\n\nErstelle einen wunderschönen, detaillierten Heftintrag über dieses Thema. Der Eintrag soll:\n- Das Thema vollständig und verständlich erklären\n- Mit einer kurzen Definition beginnen\n- Wichtige Konzepte, Zusammenhänge und Beispiele enthalten\n- Für Schüler/Studenten leicht verständlich sein\n- Mit einem kurzen "Merke dir!" Kasten am Ende enden\n\nFORMAT:\n# 📚 ${heftTopic}\n**Fach:** ${heftSubject}\n\n## 🔑 Definition\n...\n\n## 📝 Erklärung\n...\n\n## 💡 Beispiele\n...\n\n## 🔗 Zusammenhänge\n...\n\n## ✅ Merke dir!\n- Wichtigster Punkt 1\n- Wichtigster Punkt 2\n\nSei detailliert, klar und motivierend!` }];
+        const prompt = `Du bist ein brillanter Lehrer für Schüler und Studenten.
+
+Fach: ${heftSubject}
+Thema: ${heftTopic}
+
+Erstelle einen wunderschönen, detaillierten Heftintrag über dieses Thema. Der Eintrag soll:
+- Das Thema vollständig und verständlich erklären
+- Mit einer kurzen Definition beginnen
+- Wichtige Konzepte, Zusammenhänge und Beispiele enthalten
+- Für Schüler/Studenten leicht verständlich sein
+- Mit einem kurzen "Merke dir!" Kasten am Ende enden
+
+FORMAT:
+# 📚 ${heftTopic}
+**Fach:** ${heftSubject}
+
+## 🔑 Definition
+...
+
+## 📝 Erklärung
+...
+
+## 💡 Beispiele
+...
+
+## 🔗 Zusammenhänge
+...
+
+## ✅ Merke dir!
+- Wichtigster Punkt 1
+- Wichtigster Punkt 2
+
+Sei detailliert, klar und motivierend!`;
+        text = await callAI(prompt);
       } else {
         const pdfNames = heftPdfs.map((p) => p.name).join(", ");
         const pdfParts = heftPdfs.map((p) => ({ inlineData: { mimeType: "application/pdf", data: p.base64 } }));
-        parts = [
-          ...pdfParts,
-          { text: `Du bist ein brillanter Lehrer für Schüler und Studenten.\n\nEs werden ${heftPdfs.length} PDF-Datei${heftPdfs.length > 1 ? "en" : ""} aus einem Unterricht oder Kurs mitgeteilt (${pdfNames}). Fasse sie zusammen und erstelle einen schönen, lernbaren Heftintrag der ALLE Dokumente umfasst.\n\nDer Eintrag soll:\n- Die wichtigsten Punkte aus ALLEN Dokumenten zusammenfassen\n- Zusammenhänge zwischen den Dokumenten aufzeigen\n- Klar und verständlich erklären\n- Mit einem "Merke dir!" Kasten enden\n\nFORMAT:\n# 📚 Zusammenfassung: ${pdfNames}\n\n## 🔑 Hauptthemen\n...\n\n## 📝 Wichtige Punkte\n...\n\n## 💡 Erklärungen & Beispiele\n...\n\n## 🔗 Zusammenhänge\n...\n\n## ✅ Merke dir!\n- Wichtigster Punkt 1\n- Wichtigster Punkt 2\n\nSei detailliert, klar und motivierend!` }
-        ];
-      }
+        const prompt = `Du bist ein brillanter Lehrer für Schüler und Studenten.
 
-      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts }] }),
-      });
-      if (!r.ok) throw new Error(`Fehler ${r.status}`);
-      const data = await r.json();
-      const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
-      if (!text.trim()) throw new Error("Keine Antwort von der KI");
+Es werden ${heftPdfs.length} PDF-Datei${heftPdfs.length > 1 ? "en" : ""} aus einem Unterricht oder Kurs mitgeteilt (${pdfNames}). Fasse sie zusammen und erstelle einen schönen, lernbaren Heftintrag der ALLE Dokumente umfasst.
+
+Der Eintrag soll:
+- Die wichtigsten Punkte aus ALLEN Dokumenten zusammenfassen
+- Zusammenhänge zwischen den Dokumenten aufzeigen
+- Klar und verständlich erklären
+- Mit einem "Merke dir!" Kasten enden
+
+FORMAT:
+# 📚 Zusammenfassung: ${pdfNames}
+
+## 🔑 Hauptthemen
+...
+
+## 📝 Wichtige Punkte
+...
+
+## 💡 Erklärungen & Beispiele
+...
+
+## 🔗 Zusammenhänge
+...
+
+## ✅ Merke dir!
+- Wichtigster Punkt 1
+- Wichtigster Punkt 2
+
+Sei detailliert, klar und motivierend!`;
+        text = await callAIWithPDFs(pdfParts, prompt);
+      }
 
       const entry = {
         id: Date.now(),
@@ -451,34 +631,64 @@ Sei motivierend und realistisch!`;
     if (flashMode === "pdf" && flashPdfs.length === 0) { alert("Bitte mindestens eine PDF hochladen!"); return; }
     if (flashMode === "heft" && !flashSelectedHeft) { alert("Bitte einen Heftintrag auswählen!"); return; }
     setFlashLoading(true);
+    setApiStatus("");
 
     try {
-      let parts = [];
-      const jsonInstruction = `\n\nWICHTIG: Antwort NUR mit einem reinen JSON-Array. Kein Markdown, keine Backticks, kein Text davor oder danach. Genau so:\n[\n  {"front":"Vorderseite","back":"Rückseite"},\n  ...\n]`;
+      const jsonInstruction = `
 
+WICHTIG: Antwort NUR mit einem reinen JSON-Array. Kein Markdown, keine Backticks, kein Text davor oder danach. Genau so:
+[
+  {"front":"Vorderseite","back":"Rückseite"},
+  ...
+]`;
+
+      let raw;
+      
       if (flashMode === "thema") {
-        parts = [{ text: `Du bist ein Experte-Lehrer. Erstelle GENAU 12 Lernkarten (Flashcards) zum folgenden Thema.\n\nFach: ${flashSubject}\nThema: ${flashTopic}\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Vom Einfachen zum Schwierigen steigern\n- Wichtige Konzepte, Definitionen, Zusammenhänge abdecken${jsonInstruction}` }];
+        const prompt = `Du bist ein Experte-Lehrer. Erstelle GENAU 12 Lernkarten (Flashcards) zum folgenden Thema.
+
+Fach: ${flashSubject}
+Thema: ${flashTopic}
+
+Regeln:
+- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)
+- Vorderseiten: kurz, präzise (max 1-2 Sätze)
+- Rückseiten: vollständige Antwort (2-4 Sätze)
+- Vom Einfachen zum Schwierigen steigern
+- Wichtige Konzepte, Definitionen, Zusammenhänge abdecken${jsonInstruction}`;
+        raw = await callAI(prompt);
       } else if (flashMode === "pdf") {
         const pdfNames = flashPdfs.map((p) => p.name).join(", ");
         const pdfParts = flashPdfs.map((p) => ({ inlineData: { mimeType: "application/pdf", data: p.base64 } }));
-        parts = [
-          ...pdfParts,
-          { text: `Du bist ein Experte-Lehrer. Es werden ${flashPdfs.length} PDF-Datei${flashPdfs.length > 1 ? "en" : ""} (${pdfNames}) mitgeteilt. Erstelle GENAU 12 Lernkarten aus dem Inhalt dieser Dokumente.\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Decke die wichtigsten Punkte aus ALLEN Dokumenten ab\n- Vom Einfachen zum Schwierigen steigern${jsonInstruction}` }
-        ];
+        const prompt = `Du bist ein Experte-Lehrer. Es werden ${flashPdfs.length} PDF-Datei${flashPdfs.length > 1 ? "en" : ""} (${pdfNames}) mitgeteilt. Erstelle GENAU 12 Lernkarten aus dem Inhalt dieser Dokumente.
+
+Regeln:
+- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)
+- Vorderseiten: kurz, präzise (max 1-2 Sätze)
+- Rückseiten: vollständige Antwort (2-4 Sätze)
+- Decke die wichtigsten Punkte aus ALLEN Dokumenten ab
+- Vom Einfachen zum Schwierigen steigern${jsonInstruction}`;
+        raw = await callAIWithPDFs(pdfParts, prompt);
       } else {
-        // heft mode — use existing entry content
-        parts = [{ text: `Du bist ein Experte-Lehrer. Der folgende Text ist ein KI-generierter Heftintrag:\n\n---\n${flashSelectedHeft.content}\n---\n\nErstelle GENAU 12 Lernkarten basierend auf diesem Heftintrag.\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Decke die wichtigsten Konzepte aus dem Heftintrag ab\n- Vom Einfachen zum Schwierigen steigern${jsonInstruction}` }];
+        // heft mode
+        const prompt = `Du bist ein Experte-Lehrer. Der folgende Text ist ein KI-generierter Heftintrag:
+
+---
+${flashSelectedHeft.content}
+---
+
+Erstelle GENAU 12 Lernkarten basierend auf diesem Heftintrag.
+
+Regeln:
+- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)
+- Vorderseiten: kurz, präzise (max 1-2 Sätze)
+- Rückseiten: vollständige Antwort (2-4 Sätze)
+- Decke die wichtigsten Konzepte aus dem Heftintrag ab
+- Vom Einfachen zum Schwierigen steigern${jsonInstruction}`;
+        raw = await callAI(prompt);
       }
 
-      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts }] }),
-      });
-      if (!r.ok) throw new Error(`Fehler ${r.status}`);
-      const data = await r.json();
-      let raw = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
-      if (!raw.trim()) throw new Error("Keine Antwort von der KI");
+      if (!raw || !raw.trim()) throw new Error("Keine Antwort von der KI");
 
       // Strip markdown fences if present
       raw = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
@@ -518,6 +728,82 @@ Sei motivierend und realistisch!`;
       showError(e);
     } finally {
       setFlashLoading(false);
+    }
+  };
+
+  // ─── AI Tutor ───
+  const sendTutorMessage = async () => {
+    const text = tutorInput.trim();
+    if (!text || tutorLoading || tutorCooldown > 0) return;
+    setTutorInput("");
+    const userMsg = { role: "user", content: text, time: Date.now() };
+    setTutorMessages((prev) => [...prev, userMsg]);
+    setTutorLoading(true);
+    setApiStatus("");
+    setTutorCooldown(10);
+
+    try {
+      const systemPrompt = `Du bist der "StudyFlow Tutor", ein freundlicher und motivierender KI-Tutor für Schüler und Studenten. Du erklärst Konzepte klar, einfach und mit Beispielen. Du bist geduldig, ermutigend und sprichst auf Augenhöhe. Wenn eine Frage außerhalb des Lernen/Studieren-Bereichs liegt, leite sanft zurück zum Lernen. Antworte auf der Sprache, in der der Nutzer schreibt.`;
+      
+      // Nvidia API format (OpenAI-like)
+      const nvidiaMessages = [
+        { role: "system", content: systemPrompt },
+        ...tutorMessages.map((m) => ({ role: m.role === "user" ? "user" : "assistant", content: m.content })),
+        { role: "user", content: text },
+      ];
+
+      // Google API format
+      const googleContents = [
+        { role: "user", parts: [{ text: systemPrompt + "\n\n[Beginn des Gesprächs]" }] },
+        { role: "model", parts: [{ text: "Hallo! 👋 Ich bin dein StudyFlow Tutor. Wie kann ich dir heute beim Lernen helfen?" }] },
+        ...tutorMessages.map((m) => ({
+          role: m.role === "user" ? "user" : "model",
+          parts: [{ text: m.content }],
+        })),
+        { role: "user", parts: [{ text: text }] },
+      ];
+
+      let r, data, reply;
+      
+      // Try Nvidia first
+      try {
+        setApiStatus("Nvidia API...");
+        r = await fetchWithRetry(NEW_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: nvidiaMessages }),
+        });
+        if (r.ok) {
+          data = await r.json();
+          reply = data.choices?.[0]?.message?.content || data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+        }
+      } catch (nvidiaErr) {
+        console.log("Nvidia failed, trying Google...");
+      }
+
+      // Fallback to Google if Nvidia failed
+      if (!reply || !reply.trim()) {
+        setApiStatus("Google API...");
+        r = await fetchWithRetry(OLD_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ contents: googleContents }),
+        });
+        if (!r.ok) throw new Error("Fehler " + r.status);
+        data = await r.json();
+        reply = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+      }
+
+      if (!reply || !reply.trim()) throw new Error("Keine Antwort vom Tutor");
+
+      setApiStatus("");
+      const aiMsg = { role: "assistant", content: reply, time: Date.now() };
+      setTutorMessages((prev) => [...prev, aiMsg]);
+    } catch (e) {
+      showError(e);
+      setTutorMessages((prev) => prev.slice(0, -1));
+    } finally {
+      setTutorLoading(false);
     }
   };
 
@@ -977,24 +1263,27 @@ Sei motivierend und realistisch!`;
           </div>
           <h1 className={`text-5xl sm:text-6xl md:text-7xl lg:text-8xl font-extrabold tracking-tight mb-2 text-center ${dark ? "text-white" : "text-gray-900"}`}>StudyFlow</h1>
           <p className="text-lg md:text-xl lg:text-2xl font-bold bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 bg-clip-text text-transparent mb-3">Lerne smarter, nicht härter.</p>
-          <p className={`text-sm md:text-base lg:text-lg max-w-lg text-center mb-10 leading-relaxed ${dark ? "text-gray-400" : "text-gray-500"}`}>
-            Dein KI-powered Lernplan-Assistent. Personalisierte Pläne ab heute bis zum Test – komplett automatisch.
+          <p className={`text-sm md:text-base lg:text-lg max-w-2xl text-center mb-10 leading-relaxed ${dark ? "text-gray-400" : "text-gray-500"}`}>
+            Dein KI-powered Lern-Assistent mit personalisierten Lernplänen, automatischen Hefteinträgen, smarten Lernkarten und einem 24/7 KI-Tutor.
           </p>
           <button onClick={() => setView("dashboard")} className="group px-8 md:px-12 py-4 md:py-5 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white rounded-2xl text-base md:text-lg font-bold shadow-xl hover:shadow-purple-500/40 transition-all hover:scale-105 hover:-translate-y-1 flex items-center gap-3">
             Jetzt starten <ChevronRight size={22} className="group-hover:translate-x-1 transition-transform" />
           </button>
-          <div className="mt-12 md:mt-16 grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-2xl lg:max-w-3xl">
+          <div className="mt-12 md:mt-16 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full max-w-5xl">
             {[
-              { icon: Brain, title: "KI-Lernpläne", desc: "Personalisiert ab heute", g: "from-purple-500 to-pink-500" },
-              { icon: Clock, title: "Pomodoro", desc: "Fokus & Pausen", g: "from-orange-500 to-red-500" },
-              { icon: Target, title: "Streak & Ziele", desc: "Bleib motiviert", g: "from-blue-500 to-cyan-500" },
+              { icon: Brain, title: "✨ KI-Lernpläne", desc: "Personalisierte Pläne ab heute bis zum Test", g: "from-indigo-500 to-purple-600" },
+              { icon: FileText, title: "📓 Hefteinträge", desc: "KI fasst deine Themen & PDFs zusammen", g: "from-emerald-500 to-teal-600" },
+              { icon: Layers, title: "🃏 Lernkarten", desc: "Automatische Flashcards zum Lernen", g: "from-pink-500 to-rose-600" },
+              { icon: Brain, title: "🤖 KI-Tutor", desc: "24/7 persönlicher Lern-Assistent", g: "from-violet-500 to-purple-600" },
+              { icon: Clock, title: "🍅 Pomodoro", desc: "Fokussiertes Lernen mit Pausen", g: "from-orange-500 to-red-500" },
+              { icon: Target, title: "📊 Fortschritt", desc: "Streak & Ziele tracken", g: "from-blue-500 to-cyan-500" },
             ].map((f, i) => (
               <div key={i} className={`group p-5 md:p-6 rounded-2xl backdrop-blur transition-all hover:scale-105 hover:-translate-y-1 ${dark ? "bg-gray-800/60 border border-gray-700" : "bg-white/70 border border-white shadow-lg"}`}>
-                <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${f.g} flex items-center justify-center mb-3 group-hover:rotate-6 transition-transform`}>
+                <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${f.g} flex items-center justify-center mb-3 group-hover:rotate-6 transition-transform shadow-md`}>
                   <f.icon size={22} className="text-white" />
                 </div>
                 <h3 className={`font-bold text-sm md:text-base ${dark ? "text-white" : "text-gray-900"}`}>{f.title}</h3>
-                <p className={`text-xs md:text-sm mt-0.5 ${dark ? "text-gray-400" : "text-gray-500"}`}>{f.desc}</p>
+                <p className={`text-xs md:text-sm mt-0.5 leading-relaxed ${dark ? "text-gray-400" : "text-gray-500"}`}>{f.desc}</p>
               </div>
             ))}
           </div>
@@ -1029,7 +1318,7 @@ Sei motivierend und realistisch!`;
             </button>
             <div>
               <h1 className={`text-lg md:text-xl lg:text-2xl font-extrabold ${dark ? "text-white" : "text-gray-900"}`}>
-                {view === "ai" ? "✨ Dein Lernplan" : (view === "heft" || view === "heft-entry") ? "📓 Heftintrag" : (view === "flash" || view === "flash-card") ? "🃏 Lernkarten" : "📚 Dashboard"}
+                {view === "ai" ? "✨ Dein Lernplan" : (view === "heft" || view === "heft-entry") ? "📓 Heftintrag" : (view === "flash" || view === "flash-card") ? "🃏 Lernkarten" : view === "tutor" ? "🤖 KI-Tutor" : "📚 Dashboard"}
               </h1>
               <p className={`text-xs md:text-sm ${dark ? "text-gray-500" : "text-gray-400"}`}>{today().long}</p>
             </div>
@@ -1039,6 +1328,7 @@ Sei motivierend und realistisch!`;
               { id: "dashboard", label: "Dashboard", bg: "#4f46e5" },
               { id: "heft", label: "📓 Heft", bg: "#059669" },
               { id: "flash", label: "🃏 Flash", bg: "#db2777" },
+              { id: "tutor", label: "🤖 Tutor", bg: "#7c3aed" },
               ...(aiResult ? [{ id: "ai", label: "KI-Plan", bg: "#9333ea" }] : []),
             ].map((n) => {
               const active = view === n.id || (view === "heft-entry" && n.id === "heft") || (view === "flash-card" && n.id === "flash");
@@ -1237,7 +1527,7 @@ Sei motivierend und realistisch!`;
                     </div>
                   </div>
                   <button onClick={generate} disabled={loading} className={`w-full py-3 rounded-lg font-bold text-xs md:text-sm transition-all flex items-center justify-center gap-2 ${loading ? "bg-gray-400 text-gray-200 cursor-not-allowed" : "bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white hover:shadow-lg hover:scale-[1.02] shadow-md"}`}>
-                    {loading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Generiere...</> : <><Sparkles size={16} /> KI-Lernplan erstellen</>}
+                    {loading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> {apiStatus || "Generiere…"}</> : <><Sparkles size={16} /> KI-Lernplan erstellen</>}
                   </button>
                 </div>
 
@@ -1408,7 +1698,7 @@ Sei motivierend und realistisch!`;
                   )}
 
                   <button onClick={generateHeft} disabled={heftLoading} className={`w-full mt-4 py-3 rounded-lg font-bold text-xs md:text-sm transition-all flex items-center justify-center gap-2 ${heftLoading ? "bg-gray-400 text-gray-200 cursor-not-allowed" : "bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:shadow-lg hover:scale-[1.02] shadow-md"}`}>
-                    {heftLoading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Erstelle Heftintrag...</> : <><Sparkles size={16} /> Heftintrag erstellen</>}
+                    {heftLoading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> {apiStatus || "Erstelle Heftintrag…"}</> : <><Sparkles size={16} /> Heftintrag erstellen</>}
                   </button>
                 </Card>
 
@@ -1526,10 +1816,88 @@ Sei motivierend und realistisch!`;
                   </div>
                 </div>
 
+                {/* Answer Input Section */}
+                {!flashFlipped && !answerFeedback && (
+                  <div className={`max-w-lg mx-auto mb-4 p-4 rounded-xl border ${dark ? "bg-gray-800/50 border-gray-700" : "bg-white border-gray-200"}`}>
+                    <label className={`text-xs font-bold mb-2 block ${dark ? "text-gray-400" : "text-gray-600"}`}>
+                      ✍️ Deine Antwort eingeben:
+                    </label>
+                    <textarea
+                      value={userAnswer}
+                      onChange={(e) => setUserAnswer(e.target.value)}
+                      placeholder="Schreibe hier deine Antwort... (Die KI prüft sie dann)"
+                      rows={3}
+                      className={`w-full px-3 py-2.5 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-pink-500 resize-none ${dark ? "bg-gray-700 border-gray-600 text-white placeholder-gray-500" : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400"}`}
+                    />
+                    <button
+                      onClick={checkFlashcardAnswer}
+                      disabled={!userAnswer.trim() || checkingAnswer}
+                      className={`w-full mt-2 py-2.5 rounded-lg font-bold text-sm transition-all flex items-center justify-center gap-2 ${
+                        !userAnswer.trim() || checkingAnswer
+                          ? (dark ? "bg-gray-700 text-gray-500 cursor-not-allowed" : "bg-gray-200 text-gray-400 cursor-not-allowed")
+                          : "bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105"
+                      }`}
+                    >
+                      {checkingAnswer ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          KI prüft...
+                        </>
+                      ) : (
+                        <>
+                          <Check size={16} />
+                          Antwort prüfen
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Answer Feedback */}
+                {answerFeedback && (
+                  <div className={`max-w-lg mx-auto mb-4 p-4 rounded-xl border-2 ${
+                    answerFeedback.correct
+                      ? (dark ? "bg-emerald-900/30 border-emerald-600" : "bg-emerald-50 border-emerald-400")
+                      : (dark ? "bg-orange-900/30 border-orange-600" : "bg-orange-50 border-orange-400")
+                  }`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                        answerFeedback.correct
+                          ? (dark ? "bg-emerald-600" : "bg-emerald-500")
+                          : (dark ? "bg-orange-600" : "bg-orange-500")
+                      }`}>
+                        <span className="text-white text-lg font-bold">
+                          {answerFeedback.correct ? "✓" : "⚠"}
+                        </span>
+                      </div>
+                      <span className={`font-bold text-sm ${
+                        answerFeedback.correct
+                          ? (dark ? "text-emerald-400" : "text-emerald-700")
+                          : (dark ? "text-orange-400" : "text-orange-700")
+                      }`}>
+                        {answerFeedback.correct ? "Richtig!" : "Nicht ganz richtig"}
+                      </span>
+                    </div>
+                    <p className={`text-sm leading-relaxed ${dark ? "text-gray-300" : "text-gray-700"}`}>
+                      {answerFeedback.message}
+                    </p>
+                    {!answerFeedback.correct && (
+                      <button
+                        onClick={() => setFlashFlipped(true)}
+                        className={`mt-3 px-4 py-2 rounded-lg text-xs font-semibold transition-all hover:scale-105 ${
+                          dark ? "bg-orange-800 text-orange-200 hover:bg-orange-700" : "bg-orange-200 text-orange-800 hover:bg-orange-300"
+                        }`}
+                      >
+                        💡 Richtige Antwort ansehen
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {/* Navigation */}
                 <div className="flex justify-center items-center gap-3 mb-4">
                   <button
-                    onClick={() => { if (flashCardIdx > 0) { setFlashCardIdx(flashCardIdx - 1); setFlashFlipped(false); } }}
+                    onClick={() => { if (flashCardIdx > 0) { setFlashCardIdx(flashCardIdx - 1); setFlashFlipped(false); setUserAnswer(""); setAnswerFeedback(null); } }}
                     disabled={flashCardIdx === 0}
                     className={`px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm transition-all flex items-center gap-2 ${flashCardIdx === 0 ? "opacity-30 cursor-not-allowed" : "hover:scale-105"} ${dark ? "bg-gray-800 text-white border border-gray-700" : "bg-white text-gray-700 border border-gray-200 shadow-sm"}`}
                   >
@@ -1538,14 +1906,14 @@ Sei motivierend und realistisch!`;
 
                   {flashCardIdx === activeFlashSet.cards.length - 1 ? (
                     <button
-                      onClick={() => { setFlashCardIdx(0); setFlashFlipped(false); }}
+                      onClick={() => { setFlashCardIdx(0); setFlashFlipped(false); setUserAnswer(""); setAnswerFeedback(null); }}
                       className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2"
                     >
                       <RotateCcw size={15} /> Neu anfangen
                     </button>
                   ) : (
                     <button
-                      onClick={() => { setFlashCardIdx(flashCardIdx + 1); setFlashFlipped(false); }}
+                      onClick={nextCard}
                       className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2"
                     >
                       Nächste <ChevronRight size={15} />
@@ -1556,7 +1924,7 @@ Sei motivierend und realistisch!`;
                 {/* Card dots */}
                 <div className="flex justify-center gap-1.5 flex-wrap max-w-md mx-auto">
                   {activeFlashSet.cards.map((_, i) => (
-                    <button key={i} onClick={() => { setFlashCardIdx(i); setFlashFlipped(false); }} className={`rounded-full transition-all ${i === flashCardIdx ? "w-4 h-2.5 bg-pink-500" : i < flashCardIdx ? `h-2.5 w-2.5 ${dark ? "bg-pink-800" : "bg-pink-300"}` : `h-2.5 w-2.5 ${dark ? "bg-gray-700" : "bg-gray-300"}`}`} />
+                    <button key={i} onClick={() => { setFlashCardIdx(i); setFlashFlipped(false); setUserAnswer(""); setAnswerFeedback(null); }} className={`rounded-full transition-all ${i === flashCardIdx ? "w-4 h-2.5 bg-pink-500" : i < flashCardIdx ? `h-2.5 w-2.5 ${dark ? "bg-pink-800" : "bg-pink-300"}` : `h-2.5 w-2.5 ${dark ? "bg-gray-700" : "bg-gray-300"}`}`} />
                   ))}
                 </div>
               </div>
@@ -1686,7 +2054,7 @@ Sei motivierend und realistisch!`;
 
                   {/* Generate Button */}
                   <button onClick={generateFlashCards} disabled={flashLoading || (flashMode === "heft" && heftEntries.length === 0)} className={`w-full mt-4 py-3 rounded-lg font-bold text-xs md:text-sm transition-all flex items-center justify-center gap-2 ${(flashLoading || (flashMode === "heft" && heftEntries.length === 0)) ? "bg-gray-400 text-gray-200 cursor-not-allowed" : "bg-gradient-to-r from-pink-600 to-rose-600 text-white hover:shadow-lg hover:scale-[1.02] shadow-md"}`}>
-                    {flashLoading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Erstelle Lernkarten...</> : <><Sparkles size={16} /> Lernkarten erstellen</>}
+                    {flashLoading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> {apiStatus || "Erstelle Lernkarten…"}</> : <><Sparkles size={16} /> Lernkarten erstellen</>}
                   </button>
                 </Card>
 
@@ -1717,6 +2085,158 @@ Sei motivierend und realistisch!`;
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* ===== TUTOR VIEW ===== */}
+        {view === "tutor" && (
+          <div className="max-w-3xl mx-auto flex flex-col" style={{ height: "calc(100vh - 260px)", minHeight: "420px" }}>
+
+            {/* Header card */}
+            <div className={`rounded-2xl p-4 mb-3 flex items-center gap-3 flex-shrink-0 shadow-lg ${dark ? "bg-gradient-to-r from-violet-900/40 to-purple-900/40 border border-violet-700" : "bg-gradient-to-r from-violet-50 to-purple-50 border border-violet-200"}`}>
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500 via-purple-600 to-indigo-600 flex items-center justify-center shadow-lg flex-shrink-0 relative">
+                <span className="text-3xl">🤖</span>
+                <div className="absolute -top-1 -right-1 w-4 h-4 bg-emerald-400 rounded-full border-2 border-white animate-pulse" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h2 className={`text-base md:text-lg font-extrabold bg-gradient-to-r from-violet-600 to-purple-600 bg-clip-text text-transparent`}>StudyFlow Tutor</h2>
+                <p className={`text-xs ${dark ? "text-violet-300" : "text-violet-600"}`}>Dein persönlicher KI-Lern-Assistent · 24/7 verfügbar</p>
+              </div>
+              <div className={`px-3 py-1.5 rounded-full flex items-center gap-2 ${dark ? "bg-emerald-900/50" : "bg-emerald-100"}`}>
+                <div className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span className={`text-xs font-bold ${dark ? "text-emerald-400" : "text-emerald-700"}`}>Online</span>
+              </div>
+            </div>
+
+            {/* Messages area */}
+            <div ref={tutorChatRef} className={`flex-1 overflow-y-auto rounded-2xl p-4 space-y-3 ${dark ? "bg-gray-800 border border-gray-700" : "bg-white border border-gray-200 shadow-sm"}`}>
+              {/* Welcome bubble if empty */}
+              {tutorMessages.length === 0 && (
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-md">
+                    <span className="text-lg">🤖</span>
+                  </div>
+                  <div className={`max-w-[85%] rounded-2xl rounded-tl-sm px-5 py-4 shadow-sm ${dark ? "bg-gradient-to-br from-violet-900/40 to-purple-900/40 border border-violet-800" : "bg-gradient-to-br from-violet-50 to-purple-50 border border-violet-200"}`}>
+                    <p className={`text-sm leading-relaxed ${dark ? "text-violet-200" : "text-violet-900"}`}>
+                      Hallo! 👋 Ich bin dein <strong>StudyFlow Tutor</strong>. Stell mir Fragen zu deinen Lernthemen und ich helfe dir mit klaren Erklärungen und Beispielen!
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Chat messages */}
+              {tutorMessages.map((msg, i) => {
+                const isUser = msg.role === "user";
+                return (
+                  <div key={i} className={`flex items-start gap-2.5 ${isUser ? "flex-row-reverse" : ""}`}>
+                    {!isUser && (
+                      <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-md">
+                        <span className="text-lg">🤖</span>
+                      </div>
+                    )}
+                    <div className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${isUser ? (dark ? "bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600 text-white shadow-purple-500/20" : "bg-gradient-to-br from-indigo-500 via-purple-600 to-pink-600 text-white shadow-purple-500/30") : (dark ? "bg-gradient-to-br from-violet-900/30 to-purple-900/30 border border-violet-800/50" : "bg-gradient-to-br from-violet-50 to-purple-50 border border-violet-200")} ${isUser ? "rounded-tr-sm" : "rounded-tl-sm"}`}>
+                      <p className={`text-sm leading-relaxed whitespace-pre-wrap break-words ${isUser ? "text-white" : dark ? "text-violet-100" : "text-gray-900"}`}>
+                        {msg.content}
+                      </p>
+                      <p className={`text-xs mt-1.5 ${isUser ? "text-white/60 text-right" : dark ? "text-violet-400/60" : "text-violet-600/60"}`}>
+                        {new Date(msg.time).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Typing indicator */}
+              {tutorLoading && (
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-md animate-pulse">
+                    <span className="text-lg">🤖</span>
+                  </div>
+                  <div className={`rounded-2xl rounded-tl-sm px-6 py-4 shadow-sm ${dark ? "bg-gradient-to-br from-violet-900/30 to-purple-900/30 border border-violet-800/50" : "bg-gradient-to-br from-violet-50 to-purple-50 border border-violet-200"}`}>
+                    <div className="flex gap-1.5 items-center h-4">
+                      <div className={`w-2.5 h-2.5 rounded-full animate-bounce ${dark ? "bg-violet-400" : "bg-violet-600"}`} style={{ animationDelay: "0ms" }} />
+                      <div className={`w-2.5 h-2.5 rounded-full animate-bounce ${dark ? "bg-violet-400" : "bg-violet-600"}`} style={{ animationDelay: "150ms" }} />
+                      <div className={`w-2.5 h-2.5 rounded-full animate-bounce ${dark ? "bg-violet-400" : "bg-violet-600"}`} style={{ animationDelay: "300ms" }} />
+                      <div className={`w-2 h-2 rounded-full animate-bounce ${dark ? "bg-violet-400" : "bg-violet-500"}`} style={{ animationDelay: "300ms" }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Quick-start suggestions (only when empty) */}
+            {tutorMessages.length === 0 && !tutorLoading && (
+              <div className="space-y-2 mt-3 flex-shrink-0">
+                <p className={`text-xs font-semibold ${dark ? "text-violet-400" : "text-violet-600"}`}>💡 Beispiel-Fragen:</p>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    "🧪 Erkläre mir die Photosynthese",
+                    "📐 Pythagoräischer Lehrsatz einfach",
+                    "⚡ Was sind Newtonsche Kräfte?",
+                    "🌍 Wie funktioniert der Wasserkreislauf?",
+                    "🧮 Quadratische Gleichungen lösen",
+                    "📚 Tipps zum besseren Lernen",
+                  ].map((s, i) => (
+                    <button key={i} onClick={() => { setTutorInput(s.replace(/^[^ ]+ /, "")); }} className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all hover:scale-105 hover:-translate-y-0.5 ${dark ? "bg-gradient-to-r from-violet-900/40 to-purple-900/40 border-violet-700 text-violet-300 hover:border-violet-500 shadow-sm" : "bg-gradient-to-r from-violet-50 to-purple-50 border-violet-300 text-violet-700 hover:border-violet-500 hover:shadow-md"}`}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Input bar */}
+            <div className={`mt-3 flex-shrink-0 rounded-2xl border p-3 flex items-end gap-2.5 ${dark ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200 shadow-sm"}`}>
+              <textarea
+                value={tutorInput}
+                onChange={(e) => setTutorInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTutorMessage(); } }}
+                placeholder="Frage an den StudyFlow Tutor eingeben… (Enter = Senden)"
+                rows={1}
+                className={`flex-1 resize-none px-3 py-2 rounded-xl text-sm border focus:outline-none focus:ring-2 focus:ring-violet-500 transition-all ${dark ? "bg-gray-700 border-gray-600 text-white placeholder-gray-500" : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400"}`}
+                style={{ maxHeight: "120px" }}
+                disabled={tutorLoading}
+              />
+              <button
+                onClick={sendTutorMessage}
+                disabled={tutorLoading || tutorCooldown > 0 || !tutorInput.trim()}
+                className={`flex-shrink-0 w-11 h-11 rounded-xl flex items-center justify-center font-bold transition-all relative ${
+                  tutorLoading || tutorCooldown > 0 || !tutorInput.trim()
+                    ? (dark ? "bg-gray-700 text-gray-500 cursor-not-allowed" : "bg-gray-100 text-gray-400 cursor-not-allowed")
+                    : "bg-gradient-to-br from-violet-600 to-purple-700 text-white shadow-md hover:scale-110 hover:shadow-lg"
+                }`}
+              >
+                {tutorCooldown > 0 ? (
+                  <span className="text-xs font-extrabold text-violet-300">{tutorCooldown}s</span>
+                ) : tutorLoading ? (
+                  <div className="w-4 h-4 border-2 border-violet-300 border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Send size={18} />
+                )}
+              </button>
+            </div>
+
+            {/* Cooldown bar */}
+            {tutorCooldown > 0 && (
+              <div className={`mt-2 flex-shrink-0 flex items-center gap-2`}>
+                <div className={`flex-1 h-1 rounded-full overflow-hidden ${dark ? "bg-gray-700" : "bg-gray-200"}`}>
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-violet-500 to-purple-500 transition-all duration-1000"
+                    style={{ width: `${(tutorCooldown / 10) * 100}%` }}
+                  />
+                </div>
+                <span className={`text-xs font-semibold flex-shrink-0 ${dark ? "text-violet-400" : "text-violet-600"}`}>
+                  ⏳ {tutorCooldown}s
+                </span>
+              </div>
+            )}
+
+            {/* Clear history button */}
+            <div className="flex justify-center mt-2 flex-shrink-0">
+              <button onClick={() => { if (tutorMessages.length > 0 && confirm("Chat-Verlauf löschen?")) setTutorMessages([]); }} className={`text-xs transition-all hover:opacity-70 ${dark ? "text-gray-600 hover:text-gray-400" : "text-gray-400 hover:text-gray-600"}`}>
+                🗑️ Chat löschen
+              </button>
+            </div>
           </div>
         )}
 
