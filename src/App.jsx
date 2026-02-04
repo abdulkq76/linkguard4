@@ -1,13 +1,9 @@
 import { useState, useEffect, useRef } from "react";
-import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Download, TrendingUp, Play, Pause, RotateCcw, AlertCircle, Target, Lightbulb, FileText, Upload, ArrowLeft, Trash2, LogOut, Eye, EyeOff, Mail, User, Lock, Layers, Send } from "lucide-react";
+import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Download, TrendingUp, Play, Pause, RotateCcw, AlertCircle, Target, Lightbulb, FileText, Upload, ArrowLeft, Trash2, LogOut, Eye, EyeOff, Mail, User, Lock, Layers } from "lucide-react";
 
 const Card = ({ children, className = "", dark }) => (
   <div className={`rounded-2xl ${dark ? "bg-gray-800 border border-gray-700" : "bg-white shadow-sm border border-gray-100"} ${className}`}>{children}</div>
 );
-
-// ─── API URLs ───
-const API_GOOGLE = "https://api.bennokahmann.me/ai/google/jill/";
-const API_NVIDIA  = "https://api.bennokahmann.me/ai/nvidia/jill/";
 
 export default function StudyFlow() {
   const [view, setView] = useState("auth");
@@ -54,18 +50,9 @@ export default function StudyFlow() {
   const flashFileRef = useRef(null);
   const [flashDragOver, setFlashDragOver] = useState(false);
 
-  // ─── AI Tutor ───
-  const [tutorMessages, setTutorMessages] = useState([]);
-  const [tutorInput, setTutorInput] = useState("");
-  const [tutorLoading, setTutorLoading] = useState(false);
-  const [tutorCooldown, setTutorCooldown] = useState(0); // seconds left
-  const tutorScrollRef = useRef(null);
-  const tutorInputRef = useRef(null);
-  const tutorCooldownRef = useRef(null);
-
   // Auth
   const [user, setUser] = useState(null);
-  const [authMode, setAuthMode] = useState("signup");
+  const [authMode, setAuthMode] = useState("signup"); // "signup" | "login"
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPass, setAuthPass] = useState("");
@@ -115,7 +102,6 @@ export default function StudyFlow() {
       setChecked(load("sf_chk") || {});
       setHeftEntries(load("sf_heft") || []);
       setFlashSets(load("sf_flash") || []);
-      setTutorMessages(load("sf_tutor") || []);
       const session = load("sf_session");
       if (session) { setUser(session); setView("welcome"); }
     } catch (e) {}
@@ -130,7 +116,6 @@ export default function StudyFlow() {
   useEffect(() => { localStorage.setItem("sf_chk", JSON.stringify(checked)); }, [checked]);
   useEffect(() => { localStorage.setItem("sf_heft", JSON.stringify(heftEntries)); }, [heftEntries]);
   useEffect(() => { localStorage.setItem("sf_flash", JSON.stringify(flashSets)); }, [flashSets]);
-  useEffect(() => { localStorage.setItem("sf_tutor", JSON.stringify(tutorMessages)); }, [tutorMessages]);
 
   useEffect(() => {
     if (!tRun) return;
@@ -141,31 +126,13 @@ export default function StudyFlow() {
     return () => clearInterval(iv);
   }, [tRun, tMins, tSecs]);
 
-  // ─── Tutor: cooldown timer ───
-  useEffect(() => {
-    if (tutorCooldown <= 0) return;
-    tutorCooldownRef.current = setInterval(() => {
-      setTutorCooldown((p) => {
-        if (p <= 1) { clearInterval(tutorCooldownRef.current); return 0; }
-        return p - 1;
-      });
-    }, 1000);
-    return () => clearInterval(tutorCooldownRef.current);
-  }, [tutorCooldown]);
-
-  // ─── Tutor: auto-scroll to bottom ───
-  useEffect(() => {
-    if (tutorScrollRef.current) {
-      tutorScrollRef.current.scrollTop = tutorScrollRef.current.scrollHeight;
-    }
-  }, [tutorMessages, tutorLoading]);
-
   const hashPass = (p) => btoa(encodeURIComponent(p));
 
   const loadUsers = () => {
     try {
       const v = localStorage.getItem("sf_users");
       const users = v ? JSON.parse(v) : [];
+      // one-time migration: if old single-user key exists, fold it in
       if (users.length === 0) {
         try {
           const old = localStorage.getItem("sf_user");
@@ -195,10 +162,11 @@ export default function StudyFlow() {
       const res = await fetch("https://dns.google/resolve?name=" + encodeURIComponent(domain) + "&type=MX");
       const data = await res.json();
       if (data.Answer && data.Answer.some(a => a.type === 15)) return true;
+      // fallback: A-Record (some Domains senden über A-Record)
       const res2 = await fetch("https://dns.google/resolve?name=" + encodeURIComponent(domain) + "&type=A");
       const data2 = await res2.json();
       return !!(data2.Answer && data2.Answer.some(a => a.type === 1));
-    } catch { return true; }
+    } catch { return true; } // network fail → let through
   };
 
   const handleSignup = async () => {
@@ -209,6 +177,7 @@ export default function StudyFlow() {
     if (authPass.length < 6) { setAuthError("Passwort muss mindestens 6 Zeichen haben."); return; }
     if (authPass !== authPassConfirm) { setAuthError("Passwörter stimmen nicht überein."); return; }
 
+    // MX-Prüfung – verifiziert dass die Domain E-Mails empfangen kann
     setAuthValidating(true);
     const domain = authEmail.trim().toLowerCase().split("@")[1];
     const hasMX = await checkMX(domain);
@@ -285,7 +254,7 @@ export default function StudyFlow() {
     setAddingTest(false);
   };
 
-  // ─── Error display ───
+  // Helper to show user-friendly error messages
   const showError = (error) => {
     let msg = "❌ " + error.message;
     if (error.message.includes("429") || error.message.toLowerCase().includes("rate limit")) {
@@ -302,48 +271,43 @@ export default function StudyFlow() {
     alert(msg);
   };
 
-  // ─── Core fetch with retry on ONE endpoint ───
-  const fetchEndpoint = async (url, options, maxRetries = 3) => {
+  // Retry helper with exponential backoff for API calls
+  const fetchWithRetry = async (url, options, maxRetries = 3) => {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         const response = await fetch(url, options);
+        
+        // If rate limited (429), wait longer before retry
         if (response.status === 429) {
-          const waitTime = Math.min(2000 * Math.pow(2, attempt), 15000);
+          const waitTime = Math.min(2000 * Math.pow(2, attempt), 15000); // 2s, 4s, 8s, max 15s
+          console.log(`⏱️ Rate limited. Warte ${waitTime / 1000}s vor erneutem Versuch...`);
           await new Promise(resolve => setTimeout(resolve, waitTime));
           continue;
         }
+        
+        // If server error (5xx), retry
         if (response.status >= 500 && response.status < 600) {
           if (attempt < maxRetries - 1) {
-            await new Promise(resolve => setTimeout(resolve, 1500 * Math.pow(2, attempt)));
+            const waitTime = 1500 * Math.pow(2, attempt); // 1.5s, 3s, 6s
+            console.log(`⚠️ Server Fehler ${response.status}. Warte ${waitTime / 1000}s...`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
             continue;
           }
         }
+        
         return response;
       } catch (error) {
+        // Network error (failed to fetch)
         if (attempt < maxRetries - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1500 * Math.pow(2, attempt)));
+          const waitTime = 1500 * Math.pow(2, attempt); // 1.5s, 3s, 6s
+          console.log(`🌐 Netzwerkfehler. Versuch ${attempt + 1}/${maxRetries}. Warte ${waitTime / 1000}s...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
           continue;
         }
         throw error;
       }
     }
     throw new Error("Maximale Anzahl an Versuchen erreicht");
-  };
-
-  // ─── Smart fetch: tries Google first, falls back to Nvidia automatically ───
-  const fetchWithRetry = async (options, maxRetries = 3) => {
-    // Attempt Google endpoint first
-    try {
-      const res = await fetchEndpoint(API_GOOGLE, { method: "POST", headers: { "Content-Type": "application/json" }, ...options }, maxRetries);
-      if (res.ok) return res;
-      // If google returned a non-ok, non-retryable status, fall through to nvidia
-      console.warn(`⚠️ Google endpoint responded ${res.status} – switching to Nvidia fallback…`);
-    } catch (e) {
-      console.warn("⚠️ Google endpoint failed –", e.message, "– switching to Nvidia fallback…");
-    }
-
-    // Fallback: Nvidia endpoint
-    return fetchEndpoint(API_NVIDIA, { method: "POST", headers: { "Content-Type": "application/json" }, ...options }, maxRetries);
   };
 
   const generate = async () => {
@@ -391,7 +355,11 @@ FORMAT (bitte genau so):
 Sei motivierend und realistisch!`;
 
     try {
-      const r = await fetchWithRetry({ body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
+      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      });
       if (!r.ok) throw new Error(`Fehler ${r.status}`);
       const data = await r.json();
       const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
@@ -405,7 +373,7 @@ Sei motivierend und realistisch!`;
     }
   };
 
-  // ─── Heft ───
+  // Heft
   const handleFile = (file) => {
     if (!file || file.type !== "application/pdf") { alert("Bitte nur PDF-Dateien hochladen!"); return; }
     if (heftPdfs.find((p) => p.name === file.name)) { alert("Diese PDF wurde bereits hinzugefügt!"); return; }
@@ -414,7 +382,9 @@ Sei motivierend und realistisch!`;
     reader.readAsDataURL(file);
   };
 
-  const handleFiles = (files) => { Array.from(files).forEach((f) => handleFile(f)); };
+  const handleFiles = (files) => {
+    Array.from(files).forEach((f) => handleFile(f));
+  };
 
   const generateHeft = async () => {
     if (heftMode === "thema" && (!heftSubject.trim() || !heftTopic.trim())) { alert("Bitte Fach und Thema eingeben!"); return; }
@@ -434,7 +404,11 @@ Sei motivierend und realistisch!`;
         ];
       }
 
-      const r = await fetchWithRetry({ body: JSON.stringify({ contents: [{ parts }] }) });
+      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts }] }),
+      });
       if (!r.ok) throw new Error(`Fehler ${r.status}`);
       const data = await r.json();
       const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
@@ -460,6 +434,7 @@ Sei motivierend und realistisch!`;
       setHeftLoading(false);
     }
   };
+
 
   // ─── Flashcards ───
   const handleFlashFile = (file) => {
@@ -491,16 +466,23 @@ Sei motivierend und realistisch!`;
           { text: `Du bist ein Experte-Lehrer. Es werden ${flashPdfs.length} PDF-Datei${flashPdfs.length > 1 ? "en" : ""} (${pdfNames}) mitgeteilt. Erstelle GENAU 12 Lernkarten aus dem Inhalt dieser Dokumente.\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Decke die wichtigsten Punkte aus ALLEN Dokumenten ab\n- Vom Einfachen zum Schwierigen steigern${jsonInstruction}` }
         ];
       } else {
+        // heft mode — use existing entry content
         parts = [{ text: `Du bist ein Experte-Lehrer. Der folgende Text ist ein KI-generierter Heftintrag:\n\n---\n${flashSelectedHeft.content}\n---\n\nErstelle GENAU 12 Lernkarten basierend auf diesem Heftintrag.\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Decke die wichtigsten Konzepte aus dem Heftintrag ab\n- Vom Einfachen zum Schwierigen steigern${jsonInstruction}` }];
       }
 
-      const r = await fetchWithRetry({ body: JSON.stringify({ contents: [{ parts }] }) });
+      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts }] }),
+      });
       if (!r.ok) throw new Error(`Fehler ${r.status}`);
       const data = await r.json();
       let raw = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
       if (!raw.trim()) throw new Error("Keine Antwort von der KI");
 
+      // Strip markdown fences if present
       raw = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
+      // Extract JSON array robustly: first [ to last ]
       const arrStart = raw.indexOf("[");
       const arrEnd = raw.lastIndexOf("]");
       if (arrStart === -1 || arrEnd === -1 || arrEnd <= arrStart) throw new Error("Konnte keine Lernkarten parsen. Bitte versuche es noch einmal.");
@@ -539,108 +521,37 @@ Sei motivierend und realistisch!`;
     }
   };
 
-  // ─── AI Tutor: send message ───
-  const sendTutorMessage = async () => {
-    const text = tutorInput.trim();
-    if (!text || tutorLoading || tutorCooldown > 0) return;
-
-    const userMsg = { role: "user", text, time: Date.now() };
-    setTutorMessages((prev) => [...prev, userMsg]);
-    setTutorInput("");
-    setTutorLoading(true);
-
-    // Build conversation history for the API (last 20 messages max to stay within limits)
-    const history = [...tutorMessages, userMsg].slice(-20);
-    const conversationText = history.map((m) =>
-      m.role === "user" ? `Schüler: ${m.text}` : `Tutor: ${m.text}`
-    ).join("\n\n");
-
-    const systemPrompt = `Du bist "StudyFlow Tutor", ein freundlicher, motivierender und geduldiger KI-Tutor für Schüler und Studenten. Du kommunizierst auf Deutsch.
-
-Regeln:
-- Erkläre Themen klar, einfach und verständlich
-- Nutze Beispiele um Konzepte zu verdeutlichen
-- Sei ermutigend und geduldig – jede Frage ist eine gute Frage!
-- Wenn ein Thema komplex ist, teile die Erklärung in kleinere Schritte auf
-- Verwende bei Bedarf Markdown für Formatierung (Überschriften, Listen, Code, Fett/Kursiv)
-- Stelle gerne Rückfragen um zu prüfen, ob das Verständnis stimmt
-- Bleibe sachlich und hilfreich
-- Wenn du etwas nicht weißt, sage das ehrlich
-
-Bisheriger Gesprächsverlauf:
-${conversationText}
-
-Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
-
-    try {
-      console.log("🤖 Tutor: Sending request...");
-      
-      // Check if we're online first
-      if (!navigator.onLine) {
-        throw new Error("Keine Internetverbindung");
-      }
-      
-      // Use fetchWithRetry so it tries Google first, then Nvidia fallback
-      const r = await fetchWithRetry({ 
-        body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt }] }] }) 
-      });
-      
-      console.log("🤖 Tutor: Response status:", r.status);
-      if (!r.ok) {
-        const errorText = await r.text();
-        console.error("🤖 Tutor: Error response:", errorText);
-        throw new Error(`API Fehler ${r.status}`);
-      }
-      
-      const data = await r.json();
-      console.log("🤖 Tutor: Response received");
-      
-      const reply = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
-      if (!reply.trim()) {
-        console.error("🤖 Tutor: Empty response from API");
-        throw new Error("Keine Antwort vom Tutor");
-      }
-
-      console.log("🤖 Tutor: Success! Reply length:", reply.length);
-      setTutorMessages((prev) => [...prev, { role: "assistant", text: reply, time: Date.now() }]);
-      setTutorCooldown(10); // 10-Sekunden-Cooldown starten
-    } catch (e) {
-      console.error("🤖 Tutor: Error:", e);
-      let errorMsg = "❌ Verbindungsfehler zum KI-Server.";
-      if (e.message.includes("Keine Internetverbindung")) {
-        errorMsg = "❌ Keine Internetverbindung. Bitte überprüfe deine Netzwerkverbindung.";
-      } else if (e.message.includes("Failed to fetch")) {
-        errorMsg = "❌ Kann den KI-Server nicht erreichen. Mögliche Gründe:\n• Ad-Blocker blockiert die Anfrage\n• Firewall/Netzwerk blockiert api.bennokahmann.me\n• Server ist nicht erreichbar\n\nBitte:\n1. Überprüfe ob andere AI-Features (KI-Lernplan, Heftintrag) funktionieren\n2. Deaktiviere Ad-Blocker vorübergehend\n3. Versuche es in einem anderen Browser";
-      } else {
-        errorMsg = `❌ ${e.message}`;
-      }
-      setTutorMessages((prev) => [...prev, { role: "error", text: errorMsg, time: Date.now() }]);
-    } finally {
-      setTutorLoading(false);
-    }
-  };
-
   const toggleCheck = (k) => setChecked((p) => ({ ...p, [k]: !p[k] }));
   const totalTasks = (aiResult.match(/^- \[[ x]\]/gm) || []).length;
   const doneCount = Object.values(checked).filter(Boolean).length;
   const progress = totalTasks > 0 ? Math.round((doneCount / totalTasks) * 100) : 0;
 
-  // ─── Markdown rendering helpers ───
+  // Inline formatting: bold-italic, bold, italic, inline code, underline
+  // Pre-clean raw AI text to strip artifacts before line-by-line rendering
   const cleanAI = (raw) => {
     let t = raw;
+    // 1. Strip outer ```markdown ... ``` wrapper the AI sometimes adds around the whole response
     t = t.replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/, "$1");
+    // 2. Strip stray triple backticks that appear alone on a line (leftover fences)
     t = t.replace(/^```\w*\s*$/gm, "");
+    // 3. Convert markdown links [text](url) → text only
     t = t.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    // 4. Convert strikethrough ~~text~~ → plain text
     t = t.replace(/~~([^~]+?)~~/g, "$1");
+    // 5. Remove stray | characters that aren't part of a table row (but never touch lines with math $)
     t = t.split("\n").map((line) => {
       const trimmed = line.trim();
       if (trimmed.startsWith("|") && trimmed.endsWith("|")) return line;
       if (trimmed.includes("$")) return line;
       return line.replace(/\|/g, "");
     }).join("\n");
+    // 6. Common HTML entities
     t = t.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "'");
+    // 7. Remove /{...} template artifacts
     t = t.replace(/\/\{[^}]*\}/g, "");
+    // 8. Remove lone empty curly braces
     t = t.replace(/^\s*\{?\s*\}\s*$/gm, "");
+    // 9. Collapse 3+ empty lines into 1
     t = t.replace(/\n{3,}/g, "\n\n");
     return t;
   };
@@ -656,23 +567,50 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
   };
 
   const renderInline = (text) => {
+    // Split by patterns in priority order – includes links and strikethrough
     const parts = text.split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$|```[\s\S]*?```|`[^`]+`|\*\*\*.*?\*\*\*|___.*?___|\[[^\]]*\]\([^)]*\)|~~[^~]+?~~|\*\*.*?\*\*|__.*?__|``.*?``|\*[^*\n]+?\*|_[^_\n]+?_)/g);
     return parts.map((part, i) => {
       if (!part) return null;
-      if (part.startsWith("$$") && part.endsWith("$$") && part.length > 4) return renderMath(part.slice(2, -2), true, i);
+      // Display math $$...$$
+      if (part.startsWith("$$") && part.endsWith("$$") && part.length > 4) {
+        return renderMath(part.slice(2, -2), true, i);
+      }
+      // Inline math $...$  (only if it looks like LaTeX: contains \ ^ _ or {)
       if (part.startsWith("$") && part.endsWith("$") && !part.startsWith("$$") && part.length > 2) {
         const inner = part.slice(1, -1);
         if (/[\\^_{]/.test(inner)) return renderMath(inner, false, i);
       }
+      // Inline code
       const codeMatch = part.match(/^``(.+)``$/) || part.match(/^`(.+)`$/);
-      if (codeMatch) return <code key={i} className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${dark ? "bg-gray-700 text-emerald-400" : "bg-gray-200 text-emerald-700"}`}>{codeMatch[1]}</code>;
+      if (codeMatch) {
+        return <code key={i} className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${dark ? "bg-gray-700 text-emerald-400" : "bg-gray-200 text-emerald-700"}`}>{codeMatch[1]}</code>;
+      }
+      // Markdown link [text](url)
       const linkMatch = part.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
-      if (linkMatch) return <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className={`underline ${dark ? "text-indigo-400 hover:text-indigo-300" : "text-indigo-600 hover:text-indigo-500"}`}>{linkMatch[1]}</a>;
-      if (part.startsWith("~~") && part.endsWith("~~")) return <s key={i} className={dark ? "text-gray-500" : "text-gray-400"}>{part.slice(2, -2)}</s>;
-      if (part.startsWith("***") && part.endsWith("***")) return <strong key={i} className={`italic ${dark ? "text-white" : "text-gray-900"}`}>{part.slice(3, -3)}</strong>;
-      if (part.startsWith("___") && part.endsWith("___")) return <strong key={i} className={`underline ${dark ? "text-white" : "text-gray-900"}`}>{part.slice(3, -3)}</strong>;
-      if ((part.startsWith("**") && part.endsWith("**")) || (part.startsWith("__") && part.endsWith("__"))) return <strong key={i} className={dark ? "text-white" : "text-gray-900"}>{part.slice(2, -2)}</strong>;
-      if ((part.startsWith("*") && part.endsWith("*") && !part.startsWith("**")) || (part.startsWith("_") && part.endsWith("_") && !part.startsWith("__"))) return <em key={i} className={dark ? "text-gray-300 italic" : "text-gray-500 italic"}>{part.slice(1, -1)}</em>;
+      if (linkMatch) {
+        return <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className={`underline ${dark ? "text-indigo-400 hover:text-indigo-300" : "text-indigo-600 hover:text-indigo-500"}`}>{linkMatch[1]}</a>;
+      }
+      // Strikethrough ~~text~~
+      if (part.startsWith("~~") && part.endsWith("~~")) {
+        return <s key={i} className={dark ? "text-gray-500" : "text-gray-400"}>{part.slice(2, -2)}</s>;
+      }
+      // Bold italic ***text***
+      if (part.startsWith("***") && part.endsWith("***")) {
+        return <strong key={i} className={`italic ${dark ? "text-white" : "text-gray-900"}`}>{part.slice(3, -3)}</strong>;
+      }
+      // Bold underline ___text___
+      if (part.startsWith("___") && part.endsWith("___")) {
+        return <strong key={i} className={`underline ${dark ? "text-white" : "text-gray-900"}`}>{part.slice(3, -3)}</strong>;
+      }
+      // Bold **text** or __text__
+      if ((part.startsWith("**") && part.endsWith("**")) || (part.startsWith("__") && part.endsWith("__"))) {
+        return <strong key={i} className={dark ? "text-white" : "text-gray-900"}>{part.slice(2, -2)}</strong>;
+      }
+      // Italic *text* or _text_
+      if ((part.startsWith("*") && part.endsWith("*") && !part.startsWith("**")) ||
+          (part.startsWith("_") && part.endsWith("_") && !part.startsWith("__"))) {
+        return <em key={i} className={dark ? "text-gray-300 italic" : "text-gray-500 italic"}>{part.slice(1, -1)}</em>;
+      }
       return part;
     });
   };
@@ -690,14 +628,21 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
+      // Code block start/end
       if (line.trim().startsWith("```")) {
-        if (!inCodeBlock) { inCodeBlock = true; codeLang = line.trim().slice(3).trim(); codeLines = []; continue; }
-        else {
+        if (!inCodeBlock) {
+          inCodeBlock = true;
+          codeLang = line.trim().slice(3).trim();
+          codeLines = [];
+          continue;
+        } else {
           inCodeBlock = false;
           output.push(
             <div key={`code-${i}`} className={`my-3 rounded-lg overflow-hidden border ${dark ? "border-gray-600" : "border-gray-200"}`}>
               {codeLang && <div className={`px-3 py-1 text-xs font-mono ${dark ? "bg-gray-700 text-gray-400 border-b border-gray-600" : "bg-gray-100 text-gray-500 border-b border-gray-200"}`}>{codeLang}</div>}
-              <pre className={`p-3 overflow-x-auto text-xs font-mono leading-relaxed whitespace-pre ${dark ? "bg-gray-900 text-emerald-400" : "bg-gray-50 text-emerald-700"}`}>{codeLines.join("\n")}</pre>
+              <pre className={`p-3 overflow-x-auto text-xs font-mono leading-relaxed whitespace-pre ${dark ? "bg-gray-900 text-emerald-400" : "bg-gray-50 text-emerald-700"}`}>
+                {codeLines.join("\n")}
+              </pre>
             </div>
           );
           continue;
@@ -705,6 +650,7 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
       }
       if (inCodeBlock) { codeLines.push(line); continue; }
 
+      // Multi-line math block: line is exactly $$
       if (line.trim() === "$$") {
         if (!inMathBlock) { inMathBlock = true; mathLines = []; continue; }
         inMathBlock = false;
@@ -717,6 +663,7 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
       }
       if (inMathBlock) { mathLines.push(line); continue; }
 
+      // Single-line display math  $$...$$
       if (line.trim().startsWith("$$") && line.trim().endsWith("$$") && line.trim().length > 4) {
         output.push(
           <div key={`math-${i}`} className={`my-3 rounded-xl p-3 overflow-x-auto ${dark ? "bg-gray-800/60 border border-gray-700" : "bg-gray-50 border border-gray-200"}`}>
@@ -726,27 +673,42 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
         continue;
       }
 
-      if (/^---+$/.test(line.trim())) { output.push(<hr key={i} className={`my-4 border-0 h-0.5 rounded-full ${dark ? "bg-gray-700" : "bg-gray-200"}`} />); continue; }
+      // Horizontal rule ---
+      if (/^---+$/.test(line.trim())) {
+        output.push(<hr key={i} className={`my-4 border-0 h-0.5 rounded-full ${dark ? "bg-gray-700" : "bg-gray-200"}`} />);
+        continue;
+      }
 
+      // Table: lines starting and ending with |
       if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+        // Collect all consecutive table lines
         let tableLines = [];
         let j = i;
-        while (j < lines.length && lines[j].trim().startsWith("|") && lines[j].trim().endsWith("|")) { tableLines.push(lines[j]); j++; }
+        while (j < lines.length && lines[j].trim().startsWith("|") && lines[j].trim().endsWith("|")) {
+          tableLines.push(lines[j]);
+          j++;
+        }
+        // Parse table
         const rows = tableLines.map((tl) => tl.split("|").map((c) => c.trim()).filter((c) => c !== ""));
         const separatorIdx = rows.findIndex((r) => r.every((c) => /^[-:]+$/.test(c)));
         const hasHeader = separatorIdx === 1;
+
         output.push(
           <div key={`table-${i}`} className="my-3 overflow-x-auto">
             <table className={`w-full text-sm border-collapse rounded-lg overflow-hidden ${dark ? "border border-gray-600" : "border border-gray-200"}`}>
               <tbody>
                 {rows.map((row, ri) => {
-                  if (ri === separatorIdx) return null;
+                  if (ri === separatorIdx) return null; // skip separator row
                   const isHeader = hasHeader && ri === 0;
                   return (
                     <tr key={ri} className={isHeader ? (dark ? "bg-gray-700" : "bg-indigo-50") : (ri % 2 === 0 ? (dark ? "bg-gray-800" : "bg-white") : (dark ? "bg-gray-750" : "bg-gray-50"))}>
                       {row.map((cell, ci) => {
                         const Tag = isHeader ? "th" : "td";
-                        return <Tag key={ci} className={`px-3 py-2 text-left border ${dark ? "border-gray-600" : "border-gray-200"} ${isHeader ? `font-bold text-xs uppercase tracking-wide ${dark ? "text-indigo-300" : "text-indigo-600"}` : `text-xs ${dark ? "text-gray-300" : "text-gray-600"}`}`}>{renderInline(cell)}</Tag>;
+                        return (
+                          <Tag key={ci} className={`px-3 py-2 text-left border ${dark ? "border-gray-600" : "border-gray-200"} ${isHeader ? `font-bold text-xs uppercase tracking-wide ${dark ? "text-indigo-300" : "text-indigo-600"}` : `text-xs ${dark ? "text-gray-300" : "text-gray-600"}`}`}>
+                            {renderInline(cell)}
+                          </Tag>
+                        );
                       })}
                     </tr>
                   );
@@ -755,10 +717,11 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
             </table>
           </div>
         );
-        i = j - 1;
+        i = j - 1; // skip consumed table lines
         continue;
       }
 
+      // Blockquote > ...
       if (line.startsWith("> ") || line === ">") {
         const qText = line.slice(line.startsWith("> ") ? 2 : 1);
         output.push(
@@ -769,7 +732,15 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
         continue;
       }
 
-      if (line.startsWith("### ")) { output.push(<h3 key={i} className={`text-base md:text-lg font-bold mt-4 mb-1.5 ${dark ? "text-purple-300" : "text-purple-700"}`}>{renderInline(line.slice(4))}</h3>); continue; }
+      // ### H3
+      if (line.startsWith("### ")) {
+        output.push(
+          <h3 key={i} className={`text-base md:text-lg font-bold mt-4 mb-1.5 ${dark ? "text-purple-300" : "text-purple-700"}`}>{renderInline(line.slice(4))}</h3>
+        );
+        continue;
+      }
+
+      // ## H2
       if (line.startsWith("## ")) {
         output.push(
           <div key={i} className="mt-6 mb-2.5">
@@ -779,14 +750,25 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
         );
         continue;
       }
-      if (line.startsWith("# ")) { output.push(<h1 key={i} className="text-xl md:text-2xl font-extrabold mt-4 mb-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">{renderInline(line.slice(2))}</h1>); continue; }
 
+      // # H1
+      if (line.startsWith("# ")) {
+        output.push(
+          <h1 key={i} className="text-xl md:text-2xl font-extrabold mt-4 mb-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">{renderInline(line.slice(2))}</h1>
+        );
+        continue;
+      }
+
+      // Checkbox - [ ] or - [x]
       if (enableCheckboxes && /^- \[[ x]\]/.test(line)) {
         const content = line.replace(/^- \[[ x]\] /, "");
         const key = `t${taskI}`; taskI++;
         const done = checked[key];
         output.push(
-          <div key={i} onClick={() => toggleCheck(key)} className={`flex items-start gap-3 px-3 py-2.5 rounded-lg my-1.5 cursor-pointer select-none transition-all active:scale-[0.98] ${done ? (dark ? "bg-emerald-900/25 border border-emerald-800/40" : "bg-emerald-50 border border-emerald-200") : (dark ? "bg-gray-800/60 border border-gray-700/40 hover:bg-gray-800/80" : "bg-white border border-gray-200 hover:bg-gray-50")}`}>
+          <div key={i} onClick={() => toggleCheck(key)} className={`flex items-start gap-3 px-3 py-2.5 rounded-lg my-1.5 cursor-pointer select-none transition-all active:scale-[0.98] ${
+            done ? (dark ? "bg-emerald-900/25 border border-emerald-800/40" : "bg-emerald-50 border border-emerald-200")
+                 : (dark ? "bg-gray-800/60 border border-gray-700/40 hover:bg-gray-800/80" : "bg-white border border-gray-200 hover:bg-gray-50")
+          }`}>
             <div className={`mt-0.5 w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-all ${done ? "bg-emerald-500 border-emerald-500" : dark ? "border-gray-500" : "border-gray-300"}`}>
               {done && <span className="text-white text-xs font-bold">✓</span>}
             </div>
@@ -796,6 +778,7 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
         continue;
       }
 
+      // ☕ Pause line
       if (line.includes("☕") || (line.startsWith("- ") && /pause/i.test(line))) {
         output.push(
           <div key={i} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg my-1 ${dark ? "bg-amber-900/15" : "bg-amber-50"}`}>
@@ -806,18 +789,37 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
         continue;
       }
 
+      // Bullet list - or •
       if (/^[-•]\s/.test(line)) {
-        output.push(<li key={i} className={`ml-5 mb-2 text-sm md:text-base list-disc leading-relaxed ${dark ? "text-gray-300" : "text-gray-600"}`}>{renderInline(line.replace(/^[-•]\s/, ""))}</li>);
-        continue;
-      }
-      if (/^\d+[.)]\s/.test(line)) {
-        output.push(<li key={i} className={`ml-5 mb-2 text-sm md:text-base list-decimal leading-relaxed ${dark ? "text-gray-300" : "text-gray-600"}`}>{renderInline(line.replace(/^\d+[.)]\s/, ""))}</li>);
+        const c = line.replace(/^[-•]\s/, "");
+        output.push(
+          <li key={i} className={`ml-5 mb-2 text-sm md:text-base list-disc leading-relaxed ${dark ? "text-gray-300" : "text-gray-600"}`}>
+            {renderInline(c)}
+          </li>
+        );
         continue;
       }
 
+      // Numbered list
+      if (/^\d+[.)]\s/.test(line)) {
+        const c = line.replace(/^\d+[.)]\s/, "");
+        output.push(
+          <li key={i} className={`ml-5 mb-2 text-sm md:text-base list-decimal leading-relaxed ${dark ? "text-gray-300" : "text-gray-600"}`}>
+            {renderInline(c)}
+          </li>
+        );
+        continue;
+      }
+
+      // Empty line
       if (!line.trim()) { output.push(<div key={i} className="h-2" />); continue; }
 
-      output.push(<p key={i} className={`mb-2 text-sm md:text-base leading-relaxed ${dark ? "text-gray-300" : "text-gray-600"}`}>{renderInline(line)}</p>);
+      // Default paragraph
+      output.push(
+        <p key={i} className={`mb-2 text-sm md:text-base leading-relaxed ${dark ? "text-gray-300" : "text-gray-600"}`}>
+          {renderInline(line)}
+        </p>
+      );
     }
     return output;
   };
@@ -845,6 +847,8 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
           <button onClick={() => setDark(!dark)} className={`absolute top-5 right-5 p-3 rounded-2xl transition-all hover:scale-110 ${dark ? "bg-gray-800 text-yellow-400" : "bg-white/80 backdrop-blur text-gray-600 shadow-lg"}`}>
             {dark ? <Sun size={20} /> : <Moon size={20} />}
           </button>
+
+          {/* Logo */}
           <div className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl flex items-center justify-center shadow-xl mb-6 ${dark ? "bg-gradient-to-br from-indigo-600 to-purple-700 shadow-purple-500/30" : "bg-gradient-to-br from-indigo-500 to-purple-600 shadow-purple-400/30"}`} style={{ animation: "float 3s ease-in-out infinite" }}>
             <Book size={36} className="text-white" />
           </div>
@@ -852,9 +856,13 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
           <p className={`text-sm md:text-base mb-8 ${dark ? "text-gray-400" : "text-gray-500"}`}>
             {authMode === "signup" ? "Erstelle dein Konto und fange an zu lernen" : "Willkommen zurück – meld dich wieder ein"}
           </p>
+
+          {/* Card */}
           <div className={`w-full max-w-sm rounded-2xl shadow-xl overflow-hidden ${dark ? "bg-gray-800 border border-gray-700" : "bg-white border border-gray-100"}`}>
+            {/* Top color bar */}
             <div className="h-1.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
             <div className="p-6 md:p-7">
+              {/* Mode toggle */}
               <div className={`flex gap-1 p-1 rounded-xl mb-6 ${dark ? "bg-gray-700" : "bg-gray-100"}`}>
                 {["signup", "login"].map((m) => (
                   <button key={m} onClick={() => { setAuthMode(m); setAuthError(""); }} className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${authMode === m ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-sm" : dark ? "text-gray-400 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>
@@ -862,6 +870,8 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                   </button>
                 ))}
               </div>
+
+              {/* Signup fields */}
               {authMode === "signup" && (
                 <div className="space-y-3.5">
                   <div>
@@ -887,6 +897,8 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                   </div>
                 </div>
               )}
+
+              {/* Login fields */}
               {authMode === "login" && (
                 <div className="space-y-3.5">
                   <div>
@@ -904,16 +916,32 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                   </div>
                 </div>
               )}
+
+              {/* Error */}
               {authError && (
                 <div className={`mt-4 px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 ${dark ? "bg-red-900/25 border border-red-800/50 text-red-400" : "bg-red-50 border border-red-200 text-red-600"}`}>
                   <AlertCircle size={14} className="flex-shrink-0" /> {authError}
                 </div>
               )}
-              <button onClick={authMode === "signup" ? handleSignup : handleLogin} disabled={authValidating} className={`w-full mt-5 py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${authValidating ? "bg-gray-400 text-gray-200 cursor-not-allowed" : "bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg hover:shadow-purple-500/30 hover:scale-[1.02] active:scale-[0.98]"}`}>
-                {authValidating ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> E-Mail wird geprüft...</> : authMode === "signup" ? <><Sparkles size={16} /> Konto erstellen</> : <><Book size={16} /> Einloggen</>}
+
+              {/* Submit button */}
+              <button
+                onClick={authMode === "signup" ? handleSignup : handleLogin}
+                disabled={authValidating}
+                className={`w-full mt-5 py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${authValidating ? "bg-gray-400 text-gray-200 cursor-not-allowed" : "bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-lg hover:shadow-purple-500/30 hover:scale-[1.02] active:scale-[0.98]"}`}
+              >
+                {authValidating
+                  ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> E-Mail wird geprüft...</>
+                  : authMode === "signup" ? <><Sparkles size={16} /> Konto erstellen</> : <><Book size={16} /> Einloggen</>
+                }
               </button>
+
+              {/* Hint */}
               <p className={`text-center text-xs mt-4 ${dark ? "text-gray-500" : "text-gray-400"}`}>
-                {authMode === "signup" ? <>Schon ein Konto? <button onClick={() => { setAuthMode("login"); setAuthError(""); }} className="text-indigo-500 hover:text-indigo-400 font-semibold">Hier einloggen</button></> : <>Noch kein Konto? <button onClick={() => { setAuthMode("signup"); setAuthError(""); }} className="text-indigo-500 hover:text-indigo-400 font-semibold">Hier anmelden</button></>}
+                {authMode === "signup"
+                  ? <>Schon ein Konto? <button onClick={() => { setAuthMode("login"); setAuthError(""); }} className="text-indigo-500 hover:text-indigo-400 font-semibold">Hier einloggen</button></>
+                  : <>Noch kein Konto? <button onClick={() => { setAuthMode("signup"); setAuthError(""); }} className="text-indigo-500 hover:text-indigo-400 font-semibold">Hier anmelden</button></>
+                }
               </p>
             </div>
           </div>
@@ -921,6 +949,7 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
         <style>{`
           * { box-sizing: border-box; }
           html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; overflow-x: hidden; }
+
           @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-12px)} }
           @keyframes blob1 { 0%,100%{transform:scale(1) translate(0,0)} 50%{transform:scale(1.15) translate(20px,30px)} }
           @keyframes blob2 { 0%,100%{transform:scale(1) translate(0,0)} 50%{transform:scale(1.2) translate(-30px,20px)} }
@@ -973,6 +1002,7 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
         <style>{`
           * { box-sizing: border-box; }
           html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; overflow-x: hidden; }
+
           @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-14px)} }
           @keyframes blob1 { 0%,100%{transform:scale(1) translate(0,0)} 50%{transform:scale(1.15) translate(20px,30px)} }
           @keyframes blob2 { 0%,100%{transform:scale(1) translate(0,0)} 50%{transform:scale(1.2) translate(-30px,20px)} }
@@ -999,7 +1029,7 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
             </button>
             <div>
               <h1 className={`text-lg md:text-xl lg:text-2xl font-extrabold ${dark ? "text-white" : "text-gray-900"}`}>
-                {view === "ai" ? "✨ Dein Lernplan" : (view === "heft" || view === "heft-entry") ? "📓 Heftintrag" : (view === "flash" || view === "flash-card") ? "🃏 Lernkarten" : view === "tutor" ? "🤖 KI-Tutor" : "📚 Dashboard"}
+                {view === "ai" ? "✨ Dein Lernplan" : (view === "heft" || view === "heft-entry") ? "📓 Heftintrag" : (view === "flash" || view === "flash-card") ? "🃏 Lernkarten" : "📚 Dashboard"}
               </h1>
               <p className={`text-xs md:text-sm ${dark ? "text-gray-500" : "text-gray-400"}`}>{today().long}</p>
             </div>
@@ -1007,7 +1037,6 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
           <div className="flex gap-1.5 flex-wrap">
             {[
               { id: "dashboard", label: "Dashboard", bg: "#4f46e5" },
-              { id: "tutor", label: "🤖 Tutor", bg: "#7c3aed" },
               { id: "heft", label: "📓 Heft", bg: "#059669" },
               { id: "flash", label: "🃏 Flash", bg: "#db2777" },
               ...(aiResult ? [{ id: "ai", label: "KI-Plan", bg: "#9333ea" }] : []),
@@ -1158,7 +1187,11 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                     const urgent = days >= 0 && days <= 3;
                     const passed = days < 0;
                     return (
-                      <div key={t.id} className={`group p-3 rounded-lg border transition-all hover:scale-[1.02] ${passed ? (dark ? "bg-gray-700/30 border-gray-600" : "bg-gray-100 border-gray-200") : urgent ? (dark ? "bg-red-900/20 border-red-800/50" : "bg-red-50 border-red-200") : (dark ? "bg-purple-900/15 border-purple-800/40" : "bg-purple-50 border-purple-200")}`}>
+                      <div key={t.id} className={`group p-3 rounded-lg border transition-all hover:scale-[1.02] ${
+                        passed ? (dark ? "bg-gray-700/30 border-gray-600" : "bg-gray-100 border-gray-200")
+                          : urgent ? (dark ? "bg-red-900/20 border-red-800/50" : "bg-red-50 border-red-200")
+                          : (dark ? "bg-purple-900/15 border-purple-800/40" : "bg-purple-50 border-purple-200")
+                      }`}>
                         <div className="flex justify-between items-start">
                           <div className="min-w-0">
                             <p className={`font-bold text-xs md:text-sm truncate ${passed ? "line-through text-gray-400" : urgent ? "text-red-600" : dark ? "text-purple-400" : "text-purple-600"}`}>
@@ -1208,7 +1241,10 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                   </button>
                 </div>
 
-                <button onClick={() => setShowTimer(!showTimer)} className={`rounded-2xl p-4 md:p-5 transition-all flex flex-col items-center justify-center gap-2 hover:scale-[1.02] ${showTimer ? (dark ? "bg-orange-900/30 border-2 border-orange-700" : "bg-orange-50 border-2 border-orange-200") : (dark ? "bg-gray-800 border-2 border-gray-700 hover:bg-gray-700" : "bg-white border-2 border-gray-200 hover:bg-gray-50 shadow-sm")}`}>
+                <button onClick={() => setShowTimer(!showTimer)} className={`rounded-2xl p-4 md:p-5 transition-all flex flex-col items-center justify-center gap-2 hover:scale-[1.02] ${
+                  showTimer ? (dark ? "bg-orange-900/30 border-2 border-orange-700" : "bg-orange-50 border-2 border-orange-200")
+                           : (dark ? "bg-gray-800 border-2 border-gray-700 hover:bg-gray-700" : "bg-white border-2 border-gray-200 hover:bg-gray-50 shadow-sm")
+                }`}>
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${showTimer ? "bg-orange-500" : dark ? "bg-gray-700" : "bg-gray-100"}`}>
                     <Clock size={20} className={showTimer ? "text-white" : dark ? "text-orange-400" : "text-orange-500"} />
                   </div>
@@ -1249,151 +1285,10 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
           </div>
         )}
 
-        {/* ===== TUTOR VIEW ===== */}
-        {view === "tutor" && (
-          <div className="max-w-3xl mx-auto flex flex-col" style={{ height: "calc(100vh - 260px)", minHeight: "420px" }}>
-            {/* Header card */}
-            <Card dark={dark} className="p-3 md:p-4 mb-3 flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-700 flex items-center justify-center shadow-md">
-                  <span className="text-xl">🤖</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className={`text-sm md:text-base font-extrabold ${dark ? "text-white" : "text-gray-900"}`}>KI-Tutor</h2>
-                  <p className={`text-xs truncate ${dark ? "text-gray-400" : "text-gray-500"}`}>Stelle mir jede Frage zum Lernen – ich bin hier um zu helfen! 🎓</p>
-                </div>
-                <div className="flex gap-1.5 flex-shrink-0">
-                  <button
-                    onClick={() => { if (tutorMessages.length > 0 && confirm("Chat löschen?")) setTutorMessages([]); }}
-                    className={`p-2 rounded-lg transition-all hover:scale-110 ${dark ? "bg-gray-700 text-gray-400 hover:text-red-400" : "bg-gray-100 text-gray-500 hover:text-red-500"}`}
-                    title="Chat löschen"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              </div>
-            </Card>
-
-            {/* Messages scroll area */}
-            <div ref={tutorScrollRef} className={`flex-1 overflow-y-auto rounded-2xl border px-3 md:px-4 py-3 space-y-3 mb-3 ${dark ? "bg-gray-800/60 border-gray-700" : "bg-white border-gray-200 shadow-sm"}`}>
-              {/* Welcome message if empty */}
-              {tutorMessages.length === 0 && (
-                <div className="flex flex-col items-center justify-center h-full py-8 text-center">
-                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-700 flex items-center justify-center shadow-lg mb-4" style={{ animation: "float 3s ease-in-out infinite" }}>
-                    <span className="text-3xl">🤖</span>
-                  </div>
-                  <h3 className={`text-base font-extrabold mb-1.5 ${dark ? "text-white" : "text-gray-900"}`}>Hallo! Ich bin dein Tutor 👋</h3>
-                  <p className={`text-xs md:text-sm max-w-sm leading-relaxed ${dark ? "text-gray-400" : "text-gray-500"}`}>
-                    Ich kann dir bei Fragen zu <strong>Mathe, Wissenschaft, Geschichte, Sprachen</strong> und vielen anderen Themen helfen. Frag mich einfach!
-                  </p>
-                  {/* Suggestion chips */}
-                  <div className="flex flex-wrap justify-center gap-2 mt-4">
-                    {["Was ist Pythagoras?", "Erkläre Photosynthese", "Wie funktioniert die Physik?"].map((q) => (
-                      <button key={q} onClick={() => { setTutorInput(q); tutorInputRef.current?.focus(); }} className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-all hover:scale-105 ${dark ? "bg-violet-900/40 border border-violet-700 text-violet-300 hover:bg-violet-900/60" : "bg-violet-50 border border-violet-200 text-violet-600 hover:bg-violet-100"}`}>
-                        {q}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Chat bubbles */}
-              {tutorMessages.map((msg, idx) => {
-                const isUser = msg.role === "user";
-                const isError = msg.role === "error";
-                return (
-                  <div key={idx} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-                    {/* Avatar for assistant / error */}
-                    {!isUser && (
-                      <div className={`flex-shrink-0 w-7 h-7 rounded-xl flex items-center justify-center mr-2.5 mt-0.5 ${isError ? (dark ? "bg-red-900/50" : "bg-red-100") : "bg-gradient-to-br from-violet-500 to-purple-700"}`}>
-                        <span className="text-sm">{isError ? "⚠️" : "🤖"}</span>
-                      </div>
-                    )}
-
-                    <div className={`max-w-[78%] rounded-2xl px-3.5 py-2.5 ${
-                      isUser
-                        ? "bg-gradient-to-br from-violet-600 to-purple-700 text-white rounded-br-sm shadow-sm"
-                        : isError
-                          ? (dark ? "bg-red-900/25 border border-red-800/40 text-red-400" : "bg-red-50 border border-red-200 text-red-600")
-                          : (dark ? "bg-gray-700/70 border border-gray-600 text-gray-200" : "bg-gray-50 border border-gray-200 text-gray-800") + " rounded-bl-sm shadow-sm"
-                    }`}>
-                      {isUser ? (
-                        <p className="text-sm leading-relaxed">{msg.text}</p>
-                      ) : (
-                        <div className="text-sm leading-relaxed">{renderMD(msg.text)}</div>
-                      )}
-                    </div>
-
-                    {/* Avatar placeholder for user (right side) */}
-                    {isUser && (
-                      <div className="flex-shrink-0 w-7 h-7 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center ml-2.5 mt-0.5">
-                        <span className="text-white text-xs font-bold">{user?.name?.[0]?.toUpperCase() || "?"}</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-
-              {/* Typing indicator */}
-              {tutorLoading && (
-                <div className="flex justify-start">
-                  <div className="flex-shrink-0 w-7 h-7 rounded-xl bg-gradient-to-br from-violet-500 to-purple-700 flex items-center justify-center mr-2.5 mt-0.5">
-                    <span className="text-sm">🤖</span>
-                  </div>
-                  <div className={`rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm ${dark ? "bg-gray-700/70 border border-gray-600" : "bg-gray-50 border border-gray-200"}`}>
-                    <div className="flex gap-1.5 items-center">
-                      <div className={`w-2 h-2 rounded-full ${dark ? "bg-gray-500" : "bg-gray-400"}`} style={{ animation: "bounce 1.2s infinite 0s" }} />
-                      <div className={`w-2 h-2 rounded-full ${dark ? "bg-gray-500" : "bg-gray-400"}`} style={{ animation: "bounce 1.2s infinite 0.2s" }} />
-                      <div className={`w-2 h-2 rounded-full ${dark ? "bg-gray-500" : "bg-gray-400"}`} style={{ animation: "bounce 1.2s infinite 0.4s" }} />
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Input bar */}
-            <div className={`flex-shrink-0 flex items-end gap-2 rounded-2xl border p-2.5 md:p-3 ${dark ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200 shadow-sm"}`}>
-              <textarea
-                ref={tutorInputRef}
-                value={tutorInput}
-                onChange={(e) => setTutorInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTutorMessage(); } }}
-                placeholder="Frag mich etwas… (Enter zum Senden)"
-                rows={1}
-                className={`flex-1 resize-none px-3 py-2 rounded-xl text-sm border focus:outline-none focus:ring-2 focus:ring-violet-500 transition-all leading-relaxed ${dark ? "bg-gray-700 border-gray-600 text-white placeholder-gray-500" : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400"}`}
-                style={{ maxHeight: "100px" }}
-              />
-              <button
-                onClick={sendTutorMessage}
-                disabled={tutorLoading || tutorCooldown > 0 || !tutorInput.trim()}
-                className={`flex-shrink-0 w-11 h-11 rounded-xl flex items-center justify-center transition-all ${
-                  tutorLoading || tutorCooldown > 0 || !tutorInput.trim()
-                    ? (dark ? "bg-gray-700 text-gray-500 cursor-not-allowed" : "bg-gray-100 text-gray-400 cursor-not-allowed")
-                    : "bg-gradient-to-br from-violet-600 to-purple-700 text-white shadow-md hover:scale-110 active:scale-95"
-                }`}
-              >
-                {tutorLoading ? (
-                  <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
-                ) : tutorCooldown > 0 ? (
-                  <span className="text-xs font-bold">{tutorCooldown}s</span>
-                ) : (
-                  <Send size={18} />
-                )}
-              </button>
-            </div>
-
-            {/* Cooldown hint */}
-            {tutorCooldown > 0 && (
-              <p className={`text-center text-xs mt-1.5 ${dark ? "text-gray-500" : "text-gray-400"}`}>
-                ⏳ Nächste Nachricht in {tutorCooldown} Sekunden…
-              </p>
-            )}
-          </div>
-        )}
-
         {/* ===== HEFT VIEW ===== */}
         {(view === "heft" || view === "heft-entry") && (
           <div className="max-w-3xl mx-auto">
+            {/* Entry Detail */}
             {view === "heft-entry" && activeEntry && (
               <div>
                 <button onClick={() => { setView("heft"); setActiveEntry(null); }} className={`flex items-center gap-2 mb-4 text-xs md:text-sm font-bold transition-all hover:opacity-70 ${dark ? "text-indigo-400" : "text-indigo-600"}`}>
@@ -1402,8 +1297,13 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                 <div className={`rounded-2xl overflow-hidden shadow-lg ${dark ? "border border-gray-700" : ""}`}>
                   <div className="h-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
                   <div className={`p-5 md:p-7 relative ${dark ? "bg-gray-800" : "bg-amber-50"}`}>
-                    {!dark && <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: "repeating-linear-gradient(transparent, transparent 31px, #e5ddd0 31px, #e5ddd0 32px)", backgroundPosition: "0 32px" }} />}
+                    {/* Notebook lines */}
+                    {!dark && (
+                      <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: "repeating-linear-gradient(transparent, transparent 31px, #e5ddd0 31px, #e5ddd0 32px)", backgroundPosition: "0 32px" }} />
+                    )}
+                    {/* Red margin line */}
                     {!dark && <div className="absolute top-0 bottom-0 left-12 w-0.5 bg-red-300 opacity-50 pointer-events-none" />}
+
                     <div className="relative z-10">
                       <div className="flex justify-between items-start mb-4">
                         <div>
@@ -1424,6 +1324,7 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
               </div>
             )}
 
+            {/* Heft Main */}
             {view === "heft" && (
               <div>
                 <Card dark={dark} className="p-4 md:p-5 mb-4">
@@ -1436,10 +1337,17 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                       <p className={`text-xs ${dark ? "text-gray-400" : "text-gray-500"}`}>KI erklärt ein Thema oder zusammenfasst deine PDF</p>
                     </div>
                   </div>
+
+                  {/* Mode Toggle */}
                   <div className={`flex gap-1.5 p-1 rounded-lg mb-4 ${dark ? "bg-gray-700" : "bg-gray-100"}`}>
-                    <button onClick={() => { setHeftMode("thema"); setHeftPdfs([]); }} className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${heftMode === "thema" ? "bg-emerald-600 text-white shadow-sm" : dark ? "text-gray-300 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>📚 Thema eingeben</button>
-                    <button onClick={() => setHeftMode("pdf")} className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${heftMode === "pdf" ? "bg-emerald-600 text-white shadow-sm" : dark ? "text-gray-300 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>📄 PDF hochladen</button>
+                    <button onClick={() => { setHeftMode("thema"); setHeftPdfs([]); }} className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${heftMode === "thema" ? "bg-emerald-600 text-white shadow-sm" : dark ? "text-gray-300 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>
+                      📚 Thema eingeben
+                    </button>
+                    <button onClick={() => setHeftMode("pdf")} className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${heftMode === "pdf" ? "bg-emerald-600 text-white shadow-sm" : dark ? "text-gray-300 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>
+                      📄 PDF hochladen
+                    </button>
                   </div>
+
                   {heftMode === "thema" && (
                     <div className="space-y-2.5">
                       <div>
@@ -1452,34 +1360,59 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                       </div>
                     </div>
                   )}
+
                   {heftMode === "pdf" && (
                     <div>
                       <input ref={fileRef} type="file" accept=".pdf" multiple className="hidden" onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
-                      <div onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }} onClick={() => fileRef.current?.click()} className={`border-2 border-dashed rounded-xl p-5 md:p-7 text-center cursor-pointer transition-all hover:scale-[1.01] ${dragOver ? (dark ? "border-emerald-500 bg-emerald-900/20" : "border-emerald-500 bg-emerald-50") : (dark ? "border-gray-600 hover:border-gray-500" : "border-gray-300 hover:border-gray-400")}`}>
-                        <div className={`w-11 h-11 rounded-xl mx-auto mb-2 flex items-center justify-center ${dark ? "bg-gray-700" : "bg-gray-100"}`}><Upload size={22} className={dark ? "text-gray-400" : "text-gray-500"} /></div>
-                        <p className={`text-sm font-semibold ${dark ? "text-gray-300" : "text-gray-700"}`}>{heftPdfs.length === 0 ? "PDF hier ablegen oder klicken" : "+ Weitere PDFs hinzufügen"}</p>
+                      {/* Drop zone – always visible so you can keep adding */}
+                      <div
+                        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                        onDragLeave={() => setDragOver(false)}
+                        onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
+                        onClick={() => fileRef.current?.click()}
+                        className={`border-2 border-dashed rounded-xl p-5 md:p-7 text-center cursor-pointer transition-all hover:scale-[1.01] ${
+                          dragOver
+                            ? (dark ? "border-emerald-500 bg-emerald-900/20" : "border-emerald-500 bg-emerald-50")
+                            : (dark ? "border-gray-600 hover:border-gray-500" : "border-gray-300 hover:border-gray-400")
+                        }`}
+                      >
+                        <div className={`w-11 h-11 rounded-xl mx-auto mb-2 flex items-center justify-center ${dark ? "bg-gray-700" : "bg-gray-100"}`}>
+                          <Upload size={22} className={dark ? "text-gray-400" : "text-gray-500"} />
+                        </div>
+                        <p className={`text-sm font-semibold ${dark ? "text-gray-300" : "text-gray-700"}`}>
+                          {heftPdfs.length === 0 ? "PDF hier ablegen oder klicken" : "+ Weitere PDFs hinzufügen"}
+                        </p>
                         <p className={`text-xs mt-0.5 ${dark ? "text-gray-500" : "text-gray-400"}`}>Mehrere Dateien erlaubt</p>
                       </div>
+
+                      {/* List of added PDFs */}
                       {heftPdfs.length > 0 && (
                         <div className="mt-2.5 space-y-1.5">
                           {heftPdfs.map((pdf, idx) => (
                             <div key={idx} className={`flex items-center justify-between px-3 py-2 rounded-lg ${dark ? "bg-emerald-900/20 border border-emerald-800" : "bg-emerald-50 border border-emerald-200"}`}>
                               <div className="flex items-center gap-2.5 min-w-0">
                                 <div className="w-7 h-7 rounded-md bg-emerald-500 flex items-center justify-center flex-shrink-0"><FileText size={14} className="text-white" /></div>
-                                <p className={`text-xs font-bold truncate ${dark ? "text-white" : "text-gray-900"}`}>{pdf.name}</p>
+                                <div className="min-w-0">
+                                  <p className={`text-xs font-bold truncate ${dark ? "text-white" : "text-gray-900"}`}>{pdf.name}</p>
+                                </div>
                               </div>
                               <button onClick={() => setHeftPdfs(heftPdfs.filter((_, j) => j !== idx))} className="text-red-400 hover:text-red-500 transition-all flex-shrink-0"><X size={15} /></button>
                             </div>
                           ))}
-                          <p className={`text-xs text-center pt-1 ${dark ? "text-emerald-400" : "text-emerald-600"}`}>{heftPdfs.length} PDF{heftPdfs.length > 1 ? "s" : ""} geladen ✓</p>
+                          <p className={`text-xs text-center pt-1 ${dark ? "text-emerald-400" : "text-emerald-600"}`}>
+                            {heftPdfs.length} PDF{heftPdfs.length > 1 ? "s" : ""} geladen ✓
+                          </p>
                         </div>
                       )}
                     </div>
                   )}
+
                   <button onClick={generateHeft} disabled={heftLoading} className={`w-full mt-4 py-3 rounded-lg font-bold text-xs md:text-sm transition-all flex items-center justify-center gap-2 ${heftLoading ? "bg-gray-400 text-gray-200 cursor-not-allowed" : "bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:shadow-lg hover:scale-[1.02] shadow-md"}`}>
                     {heftLoading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Erstelle Heftintrag...</> : <><Sparkles size={16} /> Heftintrag erstellen</>}
                   </button>
                 </Card>
+
+                {/* Entry List */}
                 {heftEntries.length > 0 && (
                   <div>
                     <h3 className={`text-xs md:text-sm font-extrabold mb-2.5 uppercase tracking-wider ${dark ? "text-gray-400" : "text-gray-500"}`}>📓 Deine Einträge</h3>
@@ -1489,7 +1422,9 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                           <div className="flex justify-between items-center">
                             <div className="min-w-0">
                               <div className="flex items-center gap-2 mb-0.5">
-                                <span className={`text-xs px-2 py-0.5 rounded-full ${dark ? "bg-emerald-900 text-emerald-300" : "bg-emerald-100 text-emerald-700"}`}>{entry.mode === "pdf" ? "📄 PDF" : `📚 ${entry.subject}`}</span>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${dark ? "bg-emerald-900 text-emerald-300" : "bg-emerald-100 text-emerald-700"}`}>
+                                  {entry.mode === "pdf" ? "📄 PDF" : `📚 ${entry.subject}`}
+                                </span>
                                 <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>{entry.date}</span>
                               </div>
                               <p className={`font-bold text-sm truncate ${dark ? "text-white" : "text-gray-900"}`}>{entry.topic}</p>
@@ -1509,20 +1444,30 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
         {/* ===== FLASH VIEW ===== */}
         {(view === "flash" || view === "flash-card") && (
           <div className="max-w-3xl mx-auto">
+
+            {/* ── Flash Card Viewer ── */}
             {view === "flash-card" && activeFlashSet && (
               <div>
                 <button onClick={() => { setView("flash"); setActiveFlashSet(null); }} className={`flex items-center gap-2 mb-4 text-xs md:text-sm font-bold transition-all hover:opacity-70 ${dark ? "text-pink-400" : "text-pink-600"}`}>
                   <ArrowLeft size={16} /> Zurück zur Liste
                 </button>
+
+                {/* Header */}
                 <div className={`rounded-2xl p-4 md:p-5 mb-4 ${dark ? "bg-gray-800 border border-gray-700" : "bg-white border border-gray-200 shadow-sm"}`}>
                   <div className="flex justify-between items-start">
                     <div>
-                      {activeFlashSet.subject && <span className={`inline-block text-xs font-bold px-2.5 py-1 rounded-full mb-1.5 ${dark ? "bg-pink-900 text-pink-300" : "bg-pink-100 text-pink-700"}`}>📚 {activeFlashSet.subject}</span>}
+                      {activeFlashSet.subject && (
+                        <span className={`inline-block text-xs font-bold px-2.5 py-1 rounded-full mb-1.5 ${dark ? "bg-pink-900 text-pink-300" : "bg-pink-100 text-pink-700"}`}>
+                          📚 {activeFlashSet.subject}
+                        </span>
+                      )}
                       <h2 className={`text-base md:text-lg font-extrabold ${dark ? "text-white" : "text-gray-900"}`}>{activeFlashSet.title}</h2>
                       <p className={`text-xs mt-0.5 ${dark ? "text-gray-500" : "text-gray-400"}`}>Erstellt am {activeFlashSet.date} · {activeFlashSet.cards.length} Karten</p>
                     </div>
                     <button onClick={() => { setFlashSets(flashSets.filter((s) => s.id !== activeFlashSet.id)); setView("flash"); setActiveFlashSet(null); }} className="text-red-400 hover:text-red-500 transition-all"><Trash2 size={18} /></button>
                   </div>
+
+                  {/* Progress bar */}
                   <div className="mt-3">
                     <div className="flex justify-between items-center mb-1">
                       <span className={`text-xs font-semibold ${dark ? "text-gray-400" : "text-gray-500"}`}>Karte {flashCardIdx + 1} von {activeFlashSet.cards.length}</span>
@@ -1534,45 +1479,81 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                   </div>
                 </div>
 
+                {/* Flip Card */}
                 <div className="flex justify-center mb-5" style={{ perspective: "1200px" }}>
-                  <div onClick={() => setFlashFlipped(!flashFlipped)} className="w-full max-w-lg cursor-pointer" style={{ transformStyle: "preserve-3d", transition: "transform 0.5s cubic-bezier(0.4,0.2,0.2,1)", transform: flashFlipped ? "rotateY(180deg)" : "rotateY(0deg)", minHeight: "260px" }}>
-                    <div className={`absolute inset-0 rounded-2xl p-6 md:p-8 flex flex-col justify-between shadow-lg border ${dark ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"}`} style={{ backfaceVisibility: "hidden" }}>
+                  <div
+                    onClick={() => setFlashFlipped(!flashFlipped)}
+                    className="w-full max-w-lg cursor-pointer"
+                    style={{ transformStyle: "preserve-3d", transition: "transform 0.5s cubic-bezier(0.4,0.2,0.2,1)", transform: flashFlipped ? "rotateY(180deg)" : "rotateY(0deg)", minHeight: "260px" }}
+                  >
+                    {/* Front */}
+                    <div
+                      className={`absolute inset-0 rounded-2xl p-6 md:p-8 flex flex-col justify-between shadow-lg border ${dark ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"}`}
+                      style={{ backfaceVisibility: "hidden" }}
+                    >
                       <div className="flex justify-between items-center">
                         <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${dark ? "bg-pink-900/50 text-pink-300" : "bg-pink-100 text-pink-700"}`}>❓ Frage</span>
                         <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>Klick zum Umdrehen</span>
                       </div>
                       <div className="flex-1 flex items-center justify-center py-4">
-                        <p className={`text-center text-base md:text-lg font-semibold leading-relaxed ${dark ? "text-white" : "text-gray-900"}`}>{activeFlashSet.cards[flashCardIdx]?.front}</p>
+                        <p className={`text-center text-base md:text-lg font-semibold leading-relaxed ${dark ? "text-white" : "text-gray-900"}`}>
+                          {activeFlashSet.cards[flashCardIdx]?.front}
+                        </p>
                       </div>
-                      <div className="flex justify-center"><div className={`w-12 h-1 rounded-full ${dark ? "bg-gray-700" : "bg-gray-200"}`} /></div>
+                      <div className="flex justify-center">
+                        <div className={`w-12 h-1 rounded-full ${dark ? "bg-gray-700" : "bg-gray-200"}`} />
+                      </div>
                     </div>
-                    <div className={`absolute inset-0 rounded-2xl p-6 md:p-8 flex flex-col justify-between shadow-lg border ${dark ? "bg-gradient-to-br from-pink-900/30 to-rose-900/30 border-pink-800" : "bg-gradient-to-br from-pink-50 to-rose-50 border-pink-200"}`} style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>
+
+                    {/* Back */}
+                    <div
+                      className={`absolute inset-0 rounded-2xl p-6 md:p-8 flex flex-col justify-between shadow-lg border ${dark ? "bg-gradient-to-br from-pink-900/30 to-rose-900/30 border-pink-800" : "bg-gradient-to-br from-pink-50 to-rose-50 border-pink-200"}`}
+                      style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
+                    >
                       <div className="flex justify-between items-center">
                         <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${dark ? "bg-emerald-900/50 text-emerald-300" : "bg-emerald-100 text-emerald-700"}`}>✅ Antwort</span>
                         <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>Klick zum Umdrehen</span>
                       </div>
                       <div className="flex-1 flex items-center justify-center py-4">
-                        <p className={`text-center text-sm md:text-base leading-relaxed ${dark ? "text-gray-200" : "text-gray-700"}`}>{activeFlashSet.cards[flashCardIdx]?.back}</p>
+                        <p className={`text-center text-sm md:text-base leading-relaxed ${dark ? "text-gray-200" : "text-gray-700"}`}>
+                          {activeFlashSet.cards[flashCardIdx]?.back}
+                        </p>
                       </div>
-                      <div className="flex justify-center"><div className={`w-12 h-1 rounded-full ${dark ? "bg-pink-800" : "bg-pink-200"}`} /></div>
+                      <div className="flex justify-center">
+                        <div className={`w-12 h-1 rounded-full ${dark ? "bg-pink-800" : "bg-pink-200"}`} />
+                      </div>
                     </div>
                   </div>
                 </div>
 
+                {/* Navigation */}
                 <div className="flex justify-center items-center gap-3 mb-4">
-                  <button onClick={() => { if (flashCardIdx > 0) { setFlashCardIdx(flashCardIdx - 1); setFlashFlipped(false); } }} disabled={flashCardIdx === 0} className={`px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm transition-all flex items-center gap-2 ${flashCardIdx === 0 ? "opacity-30 cursor-not-allowed" : "hover:scale-105"} ${dark ? "bg-gray-800 text-white border border-gray-700" : "bg-white text-gray-700 border border-gray-200 shadow-sm"}`}>
+                  <button
+                    onClick={() => { if (flashCardIdx > 0) { setFlashCardIdx(flashCardIdx - 1); setFlashFlipped(false); } }}
+                    disabled={flashCardIdx === 0}
+                    className={`px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm transition-all flex items-center gap-2 ${flashCardIdx === 0 ? "opacity-30 cursor-not-allowed" : "hover:scale-105"} ${dark ? "bg-gray-800 text-white border border-gray-700" : "bg-white text-gray-700 border border-gray-200 shadow-sm"}`}
+                  >
                     <ArrowLeft size={15} /> Vorher
                   </button>
+
                   {flashCardIdx === activeFlashSet.cards.length - 1 ? (
-                    <button onClick={() => { setFlashCardIdx(0); setFlashFlipped(false); }} className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2">
+                    <button
+                      onClick={() => { setFlashCardIdx(0); setFlashFlipped(false); }}
+                      className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2"
+                    >
                       <RotateCcw size={15} /> Neu anfangen
                     </button>
                   ) : (
-                    <button onClick={() => { setFlashCardIdx(flashCardIdx + 1); setFlashFlipped(false); }} className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2">
+                    <button
+                      onClick={() => { setFlashCardIdx(flashCardIdx + 1); setFlashFlipped(false); }}
+                      className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2"
+                    >
                       Nächste <ChevronRight size={15} />
                     </button>
                   )}
                 </div>
+
+                {/* Card dots */}
                 <div className="flex justify-center gap-1.5 flex-wrap max-w-md mx-auto">
                   {activeFlashSet.cards.map((_, i) => (
                     <button key={i} onClick={() => { setFlashCardIdx(i); setFlashFlipped(false); }} className={`rounded-full transition-all ${i === flashCardIdx ? "w-4 h-2.5 bg-pink-500" : i < flashCardIdx ? `h-2.5 w-2.5 ${dark ? "bg-pink-800" : "bg-pink-300"}` : `h-2.5 w-2.5 ${dark ? "bg-gray-700" : "bg-gray-300"}`}`} />
@@ -1581,6 +1562,7 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
               </div>
             )}
 
+            {/* ── Flash Main (generate + list) ── */}
             {view === "flash" && (
               <div>
                 <Card dark={dark} className="p-4 md:p-5 mb-4">
@@ -1593,12 +1575,21 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                       <p className={`text-xs ${dark ? "text-gray-400" : "text-gray-500"}`}>KI erstellt Flashcards aus Thema, PDF oder Heftintrag</p>
                     </div>
                   </div>
+
+                  {/* Mode Toggle – 3 options */}
                   <div className={`flex gap-1 p-1 rounded-lg mb-4 ${dark ? "bg-gray-700" : "bg-gray-100"}`}>
-                    {[{ id: "thema", label: "📚 Thema" }, { id: "pdf", label: "📄 PDF" }, { id: "heft", label: "📓 Heftintrag" }].map((m) => (
-                      <button key={m.id} onClick={() => { setFlashMode(m.id); setFlashPdfs([]); setFlashSelectedHeft(null); }} className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${flashMode === m.id ? "bg-pink-600 text-white shadow-sm" : dark ? "text-gray-300 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>{m.label}</button>
+                    {[
+                      { id: "thema", label: "📚 Thema" },
+                      { id: "pdf", label: "📄 PDF" },
+                      { id: "heft", label: "📓 Heftintrag" },
+                    ].map((m) => (
+                      <button key={m.id} onClick={() => { setFlashMode(m.id); setFlashPdfs([]); setFlashSelectedHeft(null); }} className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${flashMode === m.id ? "bg-pink-600 text-white shadow-sm" : dark ? "text-gray-300 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>
+                        {m.label}
+                      </button>
                     ))}
                   </div>
 
+                  {/* ── Thema Inputs ── */}
                   {flashMode === "thema" && (
                     <div className="space-y-2.5">
                       <div>
@@ -1612,12 +1603,27 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                     </div>
                   )}
 
+                  {/* ── PDF Drop ── */}
                   {flashMode === "pdf" && (
                     <div>
                       <input ref={flashFileRef} type="file" accept=".pdf" multiple className="hidden" onChange={(e) => { handleFlashFiles(e.target.files); e.target.value = ""; }} />
-                      <div onDragOver={(e) => { e.preventDefault(); setFlashDragOver(true); }} onDragLeave={() => setFlashDragOver(false)} onDrop={(e) => { e.preventDefault(); setFlashDragOver(false); handleFlashFiles(e.dataTransfer.files); }} onClick={() => flashFileRef.current?.click()} className={`border-2 border-dashed rounded-xl p-5 md:p-7 text-center cursor-pointer transition-all hover:scale-[1.01] ${flashDragOver ? (dark ? "border-pink-500 bg-pink-900/20" : "border-pink-500 bg-pink-50") : (dark ? "border-gray-600 hover:border-gray-500" : "border-gray-300 hover:border-gray-400")}`}>
-                        <div className={`w-11 h-11 rounded-xl mx-auto mb-2 flex items-center justify-center ${dark ? "bg-gray-700" : "bg-gray-100"}`}><Upload size={22} className={dark ? "text-gray-400" : "text-gray-500"} /></div>
-                        <p className={`text-sm font-semibold ${dark ? "text-gray-300" : "text-gray-700"}`}>{flashPdfs.length === 0 ? "PDF hier ablegen oder klicken" : "+ Weitere PDFs hinzufügen"}</p>
+                      <div
+                        onDragOver={(e) => { e.preventDefault(); setFlashDragOver(true); }}
+                        onDragLeave={() => setFlashDragOver(false)}
+                        onDrop={(e) => { e.preventDefault(); setFlashDragOver(false); handleFlashFiles(e.dataTransfer.files); }}
+                        onClick={() => flashFileRef.current?.click()}
+                        className={`border-2 border-dashed rounded-xl p-5 md:p-7 text-center cursor-pointer transition-all hover:scale-[1.01] ${
+                          flashDragOver
+                            ? (dark ? "border-pink-500 bg-pink-900/20" : "border-pink-500 bg-pink-50")
+                            : (dark ? "border-gray-600 hover:border-gray-500" : "border-gray-300 hover:border-gray-400")
+                        }`}
+                      >
+                        <div className={`w-11 h-11 rounded-xl mx-auto mb-2 flex items-center justify-center ${dark ? "bg-gray-700" : "bg-gray-100"}`}>
+                          <Upload size={22} className={dark ? "text-gray-400" : "text-gray-500"} />
+                        </div>
+                        <p className={`text-sm font-semibold ${dark ? "text-gray-300" : "text-gray-700"}`}>
+                          {flashPdfs.length === 0 ? "PDF hier ablegen oder klicken" : "+ Weitere PDFs hinzufügen"}
+                        </p>
                         <p className={`text-xs mt-0.5 ${dark ? "text-gray-500" : "text-gray-400"}`}>Mehrere Dateien erlaubt</p>
                       </div>
                       {flashPdfs.length > 0 && (
@@ -1637,6 +1643,7 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                     </div>
                   )}
 
+                  {/* ── Heftintrag Picker ── */}
                   {flashMode === "heft" && (
                     <div>
                       {heftEntries.length === 0 ? (
@@ -1651,11 +1658,17 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                             {heftEntries.map((entry) => {
                               const selected = flashSelectedHeft?.id === entry.id;
                               return (
-                                <button key={entry.id} onClick={() => setFlashSelectedHeft(selected ? null : entry)} className={`w-full text-left p-3 rounded-xl border transition-all hover:scale-[1.01] ${selected ? (dark ? "bg-pink-900/30 border-pink-600 ring-2 ring-pink-600" : "bg-pink-50 border-pink-400 ring-2 ring-pink-400") : (dark ? "bg-gray-800/60 border-gray-700 hover:border-gray-600" : "bg-white border-gray-200 hover:border-gray-300 shadow-sm")}`}>
+                                <button key={entry.id} onClick={() => setFlashSelectedHeft(selected ? null : entry)} className={`w-full text-left p-3 rounded-xl border transition-all hover:scale-[1.01] ${
+                                  selected
+                                    ? (dark ? "bg-pink-900/30 border-pink-600 ring-2 ring-pink-600" : "bg-pink-50 border-pink-400 ring-2 ring-pink-400")
+                                    : (dark ? "bg-gray-800/60 border-gray-700 hover:border-gray-600" : "bg-white border-gray-200 hover:border-gray-300 shadow-sm")
+                                }`}>
                                   <div className="flex justify-between items-center">
                                     <div className="min-w-0">
                                       <div className="flex items-center gap-2 mb-0.5">
-                                        <span className={`text-xs px-2 py-0.5 rounded-full ${selected ? (dark ? "bg-pink-800 text-pink-200" : "bg-pink-200 text-pink-800") : (dark ? "bg-emerald-900 text-emerald-300" : "bg-emerald-100 text-emerald-700")}`}>{entry.mode === "pdf" ? "📄 PDF" : `📚 ${entry.subject}`}</span>
+                                        <span className={`text-xs px-2 py-0.5 rounded-full ${selected ? (dark ? "bg-pink-800 text-pink-200" : "bg-pink-200 text-pink-800") : (dark ? "bg-emerald-900 text-emerald-300" : "bg-emerald-100 text-emerald-700")}`}>
+                                          {entry.mode === "pdf" ? "📄 PDF" : `📚 ${entry.subject}`}
+                                        </span>
                                         <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>{entry.date}</span>
                                       </div>
                                       <p className={`font-bold text-sm truncate ${dark ? "text-white" : "text-gray-900"}`}>{entry.topic}</p>
@@ -1671,11 +1684,13 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                     </div>
                   )}
 
+                  {/* Generate Button */}
                   <button onClick={generateFlashCards} disabled={flashLoading || (flashMode === "heft" && heftEntries.length === 0)} className={`w-full mt-4 py-3 rounded-lg font-bold text-xs md:text-sm transition-all flex items-center justify-center gap-2 ${(flashLoading || (flashMode === "heft" && heftEntries.length === 0)) ? "bg-gray-400 text-gray-200 cursor-not-allowed" : "bg-gradient-to-r from-pink-600 to-rose-600 text-white hover:shadow-lg hover:scale-[1.02] shadow-md"}`}>
                     {flashLoading ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Erstelle Lernkarten...</> : <><Sparkles size={16} /> Lernkarten erstellen</>}
                   </button>
                 </Card>
 
+                {/* ── Saved Sets List ── */}
                 {flashSets.length > 0 && (
                   <div>
                     <h3 className={`text-xs md:text-sm font-extrabold mb-2.5 uppercase tracking-wider ${dark ? "text-gray-400" : "text-gray-500"}`}>🃏 Deine Lernkarten-Sets</h3>
@@ -1685,7 +1700,9 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
                           <div className="flex justify-between items-center">
                             <div className="min-w-0">
                               <div className="flex items-center gap-2 mb-0.5">
-                                <span className={`text-xs px-2 py-0.5 rounded-full ${dark ? "bg-pink-900 text-pink-300" : "bg-pink-100 text-pink-700"}`}>{set.mode === "pdf" ? "📄 PDF" : set.mode === "heft" ? "📓 Heft" : `📚 ${set.subject}`}</span>
+                                <span className={`text-xs px-2 py-0.5 rounded-full ${dark ? "bg-pink-900 text-pink-300" : "bg-pink-100 text-pink-700"}`}>
+                                  {set.mode === "pdf" ? "📄 PDF" : set.mode === "heft" ? "📓 Heft" : `📚 ${set.subject}`}
+                                </span>
                                 <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>{set.date}</span>
                                 <span className={`text-xs font-bold ${dark ? "text-pink-400" : "text-pink-600"}`}>{set.cards.length} Karten</span>
                               </div>
@@ -1707,8 +1724,6 @@ Bitte antworte jetzt auf die letzte Nachricht des Schülers.`;
       <style>{`
           * { box-sizing: border-box; }
           html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; overflow-x: hidden; }
-          @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-10px)} }
-          @keyframes bounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-5px)} }
         `}</style>
     </div>
   );
