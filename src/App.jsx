@@ -457,7 +457,7 @@ Sei motivierend und realistisch!`;
       const jsonInstruction = `\n\nWICHTIG: Antwort NUR mit einem reinen JSON-Array. Kein Markdown, keine Backticks, kein Text davor oder danach. Genau so:\n[\n  {"front":"Vorderseite","back":"Rückseite"},\n  ...\n]`;
 
       if (flashMode === "thema") {
-        parts = [{ text: `Du bist ein Experte-Lehrer. Erstelle GENAU 12 Lernkarten (Flashcards) zum folgenden Thema.\n\nFach: ${flashSubject}\nThema: ${flashTopic}\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Vom Einfachen zum Schwierigen steigern\n- Wichtige Konzepte, Definitionen, Zusammenhänge abdecken${jsonInstruction}` }];
+        parts = [{ text: `Du bist ein Experte-Lehrer. Erstelle GENAU 12 Lernkarten (Flashcards) zum folgenden Thema.\n\nFach: ${flashSubject}\nThema: ${flashTopic}\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort kurz aber bei fragen mit langerer bedeutung natürlch länger aber halt es kurz und knapp (1-3 Sätze)\n- Vom Einfachen zum Schwierigen steigern\n- Wichtige Konzepte, Definitionen, Zusammenhänge abdecken${jsonInstruction}` }];
       } else if (flashMode === "pdf") {
         const pdfNames = flashPdfs.map((p) => p.name).join(", ");
         const pdfParts = flashPdfs.map((p) => ({ inlineData: { mimeType: "application/pdf", data: p.base64 } }));
