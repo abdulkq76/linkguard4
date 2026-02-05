@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Download, TrendingUp, Play, Pause, RotateCcw, AlertCircle, Target, Lightbulb, FileText, Upload, ArrowLeft, Trash2, LogOut, Eye, EyeOff, Mail, User, Lock, Layers } from "lucide-react";
+import { Calendar, Plus, X, Moon, Sun, Book, Clock, Brain, Sparkles, ChevronRight, Download, TrendingUp, Play, Pause, RotateCcw, AlertCircle, Target, Lightbulb, FileText, Upload, ArrowLeft, Trash2, LogOut, Eye, EyeOff, Mail, User, Lock, Check } from "lucide-react";
 
 const Card = ({ children, className = "", dark }) => (
   <div className={`rounded-2xl ${dark ? "bg-gray-800 border border-gray-700" : "bg-white shadow-sm border border-gray-100"} ${className}`}>{children}</div>
@@ -47,12 +47,14 @@ export default function StudyFlow() {
   const [activeFlashSet, setActiveFlashSet] = useState(null);
   const [flashCardIdx, setFlashCardIdx] = useState(0);
   const [flashFlipped, setFlashFlipped] = useState(false);
+  const [flashUserAnswer, setFlashUserAnswer] = useState("");
+  const [flashAnswerState, setFlashAnswerState] = useState(null); // null | "correct" | "wrong"
   const flashFileRef = useRef(null);
   const [flashDragOver, setFlashDragOver] = useState(false);
 
   // Auth
   const [user, setUser] = useState(null);
-  const [authMode, setAuthMode] = useState("signup"); // "signup" | "login"
+  const [authMode, setAuthMode] = useState("signup");
   const [authName, setAuthName] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPass, setAuthPass] = useState("");
@@ -132,7 +134,6 @@ export default function StudyFlow() {
     try {
       const v = localStorage.getItem("sf_users");
       const users = v ? JSON.parse(v) : [];
-      // one-time migration: if old single-user key exists, fold it in
       if (users.length === 0) {
         try {
           const old = localStorage.getItem("sf_user");
@@ -162,11 +163,10 @@ export default function StudyFlow() {
       const res = await fetch("https://dns.google/resolve?name=" + encodeURIComponent(domain) + "&type=MX");
       const data = await res.json();
       if (data.Answer && data.Answer.some(a => a.type === 15)) return true;
-      // fallback: A-Record (some Domains senden über A-Record)
       const res2 = await fetch("https://dns.google/resolve?name=" + encodeURIComponent(domain) + "&type=A");
       const data2 = await res2.json();
       return !!(data2.Answer && data2.Answer.some(a => a.type === 1));
-    } catch { return true; } // network fail → let through
+    } catch { return true; }
   };
 
   const handleSignup = async () => {
@@ -177,7 +177,6 @@ export default function StudyFlow() {
     if (authPass.length < 6) { setAuthError("Passwort muss mindestens 6 Zeichen haben."); return; }
     if (authPass !== authPassConfirm) { setAuthError("Passwörter stimmen nicht überein."); return; }
 
-    // MX-Prüfung – verifiziert dass die Domain E-Mails empfangen kann
     setAuthValidating(true);
     const domain = authEmail.trim().toLowerCase().split("@")[1];
     const hasMX = await checkMX(domain);
@@ -254,7 +253,6 @@ export default function StudyFlow() {
     setAddingTest(false);
   };
 
-  // Helper to show user-friendly error messages
   const showError = (error) => {
     let msg = "❌ " + error.message;
     if (error.message.includes("429") || error.message.toLowerCase().includes("rate limit")) {
@@ -271,24 +269,21 @@ export default function StudyFlow() {
     alert(msg);
   };
 
-  // Retry helper with exponential backoff for API calls
   const fetchWithRetry = async (url, options, maxRetries = 3) => {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         const response = await fetch(url, options);
         
-        // If rate limited (429), wait longer before retry
         if (response.status === 429) {
-          const waitTime = Math.min(2000 * Math.pow(2, attempt), 15000); // 2s, 4s, 8s, max 15s
+          const waitTime = Math.min(2000 * Math.pow(2, attempt), 15000);
           console.log(`⏱️ Rate limited. Warte ${waitTime / 1000}s vor erneutem Versuch...`);
           await new Promise(resolve => setTimeout(resolve, waitTime));
           continue;
         }
         
-        // If server error (5xx), retry
         if (response.status >= 500 && response.status < 600) {
           if (attempt < maxRetries - 1) {
-            const waitTime = 1500 * Math.pow(2, attempt); // 1.5s, 3s, 6s
+            const waitTime = 1500 * Math.pow(2, attempt);
             console.log(`⚠️ Server Fehler ${response.status}. Warte ${waitTime / 1000}s...`);
             await new Promise(resolve => setTimeout(resolve, waitTime));
             continue;
@@ -297,9 +292,8 @@ export default function StudyFlow() {
         
         return response;
       } catch (error) {
-        // Network error (failed to fetch)
         if (attempt < maxRetries - 1) {
-          const waitTime = 1500 * Math.pow(2, attempt); // 1.5s, 3s, 6s
+          const waitTime = 1500 * Math.pow(2, attempt);
           console.log(`🌐 Netzwerkfehler. Versuch ${attempt + 1}/${maxRetries}. Warte ${waitTime / 1000}s...`);
           await new Promise(resolve => setTimeout(resolve, waitTime));
           continue;
@@ -308,6 +302,50 @@ export default function StudyFlow() {
       }
     }
     throw new Error("Maximale Anzahl an Versuchen erreicht");
+  };
+
+  // Fallback API mit Retry-Mechanismus
+  const fetchAI = async (prompt, parts = null) => {
+    const apis = [
+      { url: "https://api.bennokahmann.me/ai/google/jill/", name: "Google" },
+      { url: "https://api.bennokahmann.me/ai/nvidia/jill/", name: "NVIDIA" }
+    ];
+
+    for (const api of apis) {
+      try {
+        console.log(`🔄 Versuche ${api.name} API...`);
+        const body = parts 
+          ? { contents: [{ parts }] }
+          : { contents: [{ parts: [{ text: prompt }] }] };
+        
+        const r = await fetchWithRetry(api.url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }, 2); // Nur 2 Versuche pro API
+
+        if (!r.ok) {
+          console.log(`❌ ${api.name} API Fehler ${r.status}`);
+          continue;
+        }
+
+        const data = await r.json();
+        const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+        
+        if (!text.trim()) {
+          console.log(`⚠️ ${api.name} API: Leere Antwort`);
+          continue;
+        }
+
+        console.log(`✅ ${api.name} API erfolgreich`);
+        return text;
+      } catch (e) {
+        console.log(`❌ ${api.name} API Fehler:`, e.message);
+        continue;
+      }
+    }
+
+    throw new Error("Alle APIs sind derzeit nicht erreichbar. Bitte versuche es später erneut.");
   };
 
   const generate = async () => {
@@ -355,15 +393,7 @@ FORMAT (bitte genau so):
 Sei motivierend und realistisch!`;
 
     try {
-      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-      });
-      if (!r.ok) throw new Error(`Fehler ${r.status}`);
-      const data = await r.json();
-      const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
-      if (!text.trim()) throw new Error("Keine Antwort von der KI");
+      const text = await fetchAI(prompt);
       setAiResult(text);
       setView("ai");
     } catch (e) {
@@ -373,7 +403,6 @@ Sei motivierend und realistisch!`;
     }
   };
 
-  // Heft
   const handleFile = (file) => {
     if (!file || file.type !== "application/pdf") { alert("Bitte nur PDF-Dateien hochladen!"); return; }
     if (heftPdfs.find((p) => p.name === file.name)) { alert("Diese PDF wurde bereits hinzugefügt!"); return; }
@@ -394,26 +423,78 @@ Sei motivierend und realistisch!`;
     try {
       let parts = [];
       if (heftMode === "thema") {
-        parts = [{ text: `Du bist ein brillanter Lehrer für Schüler und Studenten.\n\nFach: ${heftSubject}\nThema: ${heftTopic}\n\nErstelle einen wunderschönen, detaillierten Heftintrag über dieses Thema. Der Eintrag soll:\n- Das Thema vollständig und verständlich erklären\n- Mit einer kurzen Definition beginnen\n- Wichtige Konzepte, Zusammenhänge und Beispiele enthalten\n- Für Schüler/Studenten leicht verständlich sein\n- Mit einem kurzen "Merke dir!" Kasten am Ende enden\n\nFORMAT:\n# 📚 ${heftTopic}\n**Fach:** ${heftSubject}\n\n## 🔑 Definition\n...\n\n## 📝 Erklärung\n...\n\n## 💡 Beispiele\n...\n\n## 🔗 Zusammenhänge\n...\n\n## ✅ Merke dir!\n- Wichtigster Punkt 1\n- Wichtigster Punkt 2\n\nSei detailliert, klar und motivierend!` }];
+        const prompt = `Du bist ein brillanter Lehrer für Schüler und Studenten.
+
+Fach: ${heftSubject}
+Thema: ${heftTopic}
+
+Erstelle einen wunderschönen, detaillierten Heftintrag über dieses Thema. Der Eintrag soll:
+- Das Thema vollständig und verständlich erklären
+- Mit einer kurzen Definition beginnen
+- Wichtige Konzepte, Zusammenhänge und Beispiele enthalten
+- Für Schüler/Studenten leicht verständlich sein
+- Mit einem kurzen "Merke dir!" Kasten am Ende enden
+
+FORMAT:
+# 📚 ${heftTopic}
+**Fach:** ${heftSubject}
+
+## 🔑 Definition
+...
+
+## 📝 Erklärung
+...
+
+## 💡 Beispiele
+...
+
+## 🔗 Zusammenhänge
+...
+
+## ✅ Merke dir!
+- Wichtigster Punkt 1
+- Wichtigster Punkt 2
+
+Sei detailliert, klar und motivierend!`;
+        parts = [{ text: prompt }];
       } else {
         const pdfNames = heftPdfs.map((p) => p.name).join(", ");
         const pdfParts = heftPdfs.map((p) => ({ inlineData: { mimeType: "application/pdf", data: p.base64 } }));
-        parts = [
-          ...pdfParts,
-          { text: `Du bist ein brillanter Lehrer für Schüler und Studenten.\n\nEs werden ${heftPdfs.length} PDF-Datei${heftPdfs.length > 1 ? "en" : ""} aus einem Unterricht oder Kurs mitgeteilt (${pdfNames}). Fasse sie zusammen und erstelle einen schönen, lernbaren Heftintrag der ALLE Dokumente umfasst.\n\nDer Eintrag soll:\n- Die wichtigsten Punkte aus ALLEN Dokumenten zusammenfassen\n- Zusammenhänge zwischen den Dokumenten aufzeigen\n- Klar und verständlich erklären\n- Mit einem "Merke dir!" Kasten enden\n\nFORMAT:\n# 📚 Zusammenfassung: ${pdfNames}\n\n## 🔑 Hauptthemen\n...\n\n## 📝 Wichtige Punkte\n...\n\n## 💡 Erklärungen & Beispiele\n...\n\n## 🔗 Zusammenhänge\n...\n\n## ✅ Merke dir!\n- Wichtigster Punkt 1\n- Wichtigster Punkt 2\n\nSei detailliert, klar und motivierend!` }
-        ];
+        const prompt = `Du bist ein brillanter Lehrer für Schüler und Studenten.
+
+Es werden ${heftPdfs.length} PDF-Datei${heftPdfs.length > 1 ? "en" : ""} aus einem Unterricht oder Kurs mitgeteilt (${pdfNames}). Fasse sie zusammen und erstelle einen schönen, lernbaren Heftintrag der ALLE Dokumente umfasst.
+
+Der Eintrag soll:
+- Die wichtigsten Punkte aus ALLEN Dokumenten zusammenfassen
+- Zusammenhänge zwischen den Dokumenten aufzeigen
+- Klar und verständlich erklären
+- Mit einem "Merke dir!" Kasten enden
+
+FORMAT:
+# 📚 Zusammenfassung: ${pdfNames}
+
+## 🔑 Hauptthemen
+...
+
+## 📝 Wichtige Punkte
+...
+
+## 💡 Erklärungen & Beispiele
+...
+
+## 🔗 Zusammenhänge
+...
+
+## ✅ Merke dir!
+- Wichtigster Punkt 1
+- Wichtigster Punkt 2
+
+Sei detailliert, klar und motivierend!`;
+        parts = [...pdfParts, { text: prompt }];
       }
 
-      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts }] }),
-      });
-      if (!r.ok) throw new Error(`Fehler ${r.status}`);
-      const data = await r.json();
-      const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
-      if (!text.trim()) throw new Error("Keine Antwort von der KI");
-
+      const text = await fetchAI(null, parts);
+      
       const entry = {
         id: Date.now(),
         mode: heftMode,
@@ -435,8 +516,6 @@ Sei motivierend und realistisch!`;
     }
   };
 
-
-  // ─── Flashcards ───
   const handleFlashFile = (file) => {
     if (!file || file.type !== "application/pdf") { alert("Bitte nur PDF-Dateien hochladen!"); return; }
     if (flashPdfs.find((p) => p.name === file.name)) { alert("Diese PDF wurde bereits hinzugefügt!"); return; }
@@ -457,32 +536,51 @@ Sei motivierend und realistisch!`;
       const jsonInstruction = `\n\nWICHTIG: Antwort NUR mit einem reinen JSON-Array. Kein Markdown, keine Backticks, kein Text davor oder danach. Genau so:\n[\n  {"front":"Vorderseite","back":"Rückseite"},\n  ...\n]`;
 
       if (flashMode === "thema") {
-        parts = [{ text: `Du bist ein Experte-Lehrer. Erstelle GENAU 12 Lernkarten (Flashcards) zum folgenden Thema.\n\nFach: ${flashSubject}\nThema: ${flashTopic}\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort kurz aber bei fragen mit langerer bedeutung natürlch länger aber halt es kurz und knapp (1-3 Sätze)\n- Vom Einfachen zum Schwierigen steigern\n- Wichtige Konzepte, Definitionen, Zusammenhänge abdecken${jsonInstruction}` }];
+        const prompt = `Du bist ein Experte-Lehrer. Erstelle GENAU 12 Lernkarten (Flashcards) zum folgenden Thema.
+
+Fach: ${flashSubject}
+Thema: ${flashTopic}
+
+Regeln:
+- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)
+- Vorderseiten: kurz, präzise (max 1-2 Sätze)
+- Rückseiten: kurze, knappe Antworten (1-2 Sätze, maximal 3 Sätze bei komplexeren Fragen)
+- Vom Einfachen zum Schwierigen steigern
+- Wichtige Konzepte, Definitionen, Zusammenhänge abdecken${jsonInstruction}`;
+        parts = [{ text: prompt }];
       } else if (flashMode === "pdf") {
         const pdfNames = flashPdfs.map((p) => p.name).join(", ");
         const pdfParts = flashPdfs.map((p) => ({ inlineData: { mimeType: "application/pdf", data: p.base64 } }));
-        parts = [
-          ...pdfParts,
-          { text: `Du bist ein Experte-Lehrer. Es werden ${flashPdfs.length} PDF-Datei${flashPdfs.length > 1 ? "en" : ""} (${pdfNames}) mitgeteilt. Erstelle GENAU 12 Lernkarten aus dem Inhalt dieser Dokumente.\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Decke die wichtigsten Punkte aus ALLEN Dokumenten ab\n- Vom Einfachen zum Schwierigen steigern${jsonInstruction}` }
-        ];
+        const prompt = `Du bist ein Experte-Lehrer. Es werden ${flashPdfs.length} PDF-Datei${flashPdfs.length > 1 ? "en" : ""} (${pdfNames}) mitgeteilt. Erstelle GENAU 12 Lernkarten aus dem Inhalt dieser Dokumente.
+
+Regeln:
+- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)
+- Vorderseiten: kurz, präzise (max 1-2 Sätze)
+- Rückseiten: kurze, knappe Antworten (1-2 Sätze, maximal 3 Sätze bei komplexeren Fragen)
+- Decke die wichtigsten Punkte aus ALLEN Dokumenten ab
+- Vom Einfachen zum Schwierigen steigern${jsonInstruction}`;
+        parts = [...pdfParts, { text: prompt }];
       } else {
-        // heft mode — use existing entry content
-        parts = [{ text: `Du bist ein Experte-Lehrer. Der folgende Text ist ein KI-generierter Heftintrag:\n\n---\n${flashSelectedHeft.content}\n---\n\nErstelle GENAU 12 Lernkarten basierend auf diesem Heftintrag.\n\nRegeln:\n- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)\n- Vorderseiten: kurz, präzise (max 1-2 Sätze)\n- Rückseiten: vollständige Antwort (2-4 Sätze)\n- Decke die wichtigsten Konzepte aus dem Heftintrag ab\n- Vom Einfachen zum Schwierigen steigern${jsonInstruction}` }];
+        const prompt = `Du bist ein Experte-Lehrer. Der folgende Text ist ein KI-generierter Heftintrag:
+
+---
+${flashSelectedHeft.content}
+---
+
+Erstelle GENAU 12 Lernkarten basierend auf diesem Heftintrag.
+
+Regeln:
+- Jede Karte hat VORDERSEITE (Frage/Begriff) und RÜCKSEITE (Antwort/Erklärung)
+- Vorderseiten: kurz, präzise (max 1-1.5/2 Sätze)
+- Rückseiten: kurze, knappe Antworten (1-2 Sätze, maximal 3 Sätze bei komplexeren Fragen)
+- Decke die wichtigsten Konzepte aus dem Heftintrag ab
+- Vom Einfachen zum Schwierigen steigern${jsonInstruction}`;
+        parts = [{ text: prompt }];
       }
 
-      const r = await fetchWithRetry("https://api.bennokahmann.me/ai/google/jill/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts }] }),
-      });
-      if (!r.ok) throw new Error(`Fehler ${r.status}`);
-      const data = await r.json();
-      let raw = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
-      if (!raw.trim()) throw new Error("Keine Antwort von der KI");
-
-      // Strip markdown fences if present
+      let raw = await fetchAI(null, parts);
+      
       raw = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
-      // Extract JSON array robustly: first [ to last ]
       const arrStart = raw.indexOf("[");
       const arrEnd = raw.lastIndexOf("]");
       if (arrStart === -1 || arrEnd === -1 || arrEnd <= arrStart) throw new Error("Konnte keine Lernkarten parsen. Bitte versuche es noch einmal.");
@@ -509,6 +607,8 @@ Sei motivierend und realistisch!`;
       setActiveFlashSet(newSet);
       setFlashCardIdx(0);
       setFlashFlipped(false);
+      setFlashUserAnswer("");
+      setFlashAnswerState(null);
       setView("flash-card");
       setFlashSubject("");
       setFlashTopic("");
@@ -521,37 +621,73 @@ Sei motivierend und realistisch!`;
     }
   };
 
+  // Antwort-Prüfung (vereinfacht, aber tolerant)
+  const normalizeText = (text) => {
+    return text
+      .toLowerCase()
+      .trim()
+      .replace(/[.,!?;:]/g, "")
+      .replace(/\s+/g, " ");
+  };
+
+  const checkAnswer = () => {
+    if (!flashUserAnswer.trim()) {
+      alert("Bitte gib eine Antwort ein!");
+      return;
+    }
+
+    const currentCard = activeFlashSet.cards[flashCardIdx];
+    const userNorm = normalizeText(flashUserAnswer);
+    const correctNorm = normalizeText(currentCard.back);
+
+    // Einfache Ähnlichkeitsprüfung: Wenn mindestens 60% der Wörter übereinstimmen
+    const userWords = userNorm.split(" ");
+    const correctWords = correctNorm.split(" ");
+    
+    let matchCount = 0;
+    userWords.forEach(word => {
+      if (correctWords.includes(word)) matchCount++;
+    });
+
+    const similarity = matchCount / Math.max(userWords.length, correctWords.length);
+
+    if (similarity >= 0.6 || userNorm === correctNorm) {
+      setFlashAnswerState("correct");
+    } else {
+      setFlashAnswerState("wrong");
+      setFlashFlipped(true); // Zeige richtige Antwort
+    }
+  };
+
+  const nextFlashCard = () => {
+    if (flashCardIdx < activeFlashSet.cards.length - 1) {
+      setFlashCardIdx(flashCardIdx + 1);
+      setFlashFlipped(false);
+      setFlashUserAnswer("");
+      setFlashAnswerState(null);
+    }
+  };
+
   const toggleCheck = (k) => setChecked((p) => ({ ...p, [k]: !p[k] }));
   const totalTasks = (aiResult.match(/^- \[[ x]\]/gm) || []).length;
   const doneCount = Object.values(checked).filter(Boolean).length;
   const progress = totalTasks > 0 ? Math.round((doneCount / totalTasks) * 100) : 0;
 
-  // Inline formatting: bold-italic, bold, italic, inline code, underline
-  // Pre-clean raw AI text to strip artifacts before line-by-line rendering
   const cleanAI = (raw) => {
     let t = raw;
-    // 1. Strip outer ```markdown ... ``` wrapper the AI sometimes adds around the whole response
     t = t.replace(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```\s*$/, "$1");
-    // 2. Strip stray triple backticks that appear alone on a line (leftover fences)
     t = t.replace(/^```\w*\s*$/gm, "");
-    // 3. Convert markdown links [text](url) → text only
     t = t.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
-    // 4. Convert strikethrough ~~text~~ → plain text
     t = t.replace(/~~([^~]+?)~~/g, "$1");
-    // 5. Remove stray | characters that aren't part of a table row (but never touch lines with math $)
     t = t.split("\n").map((line) => {
       const trimmed = line.trim();
       if (trimmed.startsWith("|") && trimmed.endsWith("|")) return line;
       if (trimmed.includes("$")) return line;
       return line.replace(/\|/g, "");
     }).join("\n");
-    // 6. Common HTML entities
     t = t.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, "\"").replace(/&#39;/g, "'");
-    // 7. Remove /{...} template artifacts
     t = t.replace(/\/\{[^}]*\}/g, "");
-    // 8. Remove lone empty curly braces
     t = t.replace(/^\s*\{?\s*\}\s*$/gm, "");
-    // 9. Collapse 3+ empty lines into 1
     t = t.replace(/\n{3,}/g, "\n\n");
     return t;
   };
@@ -567,46 +703,36 @@ Sei motivierend und realistisch!`;
   };
 
   const renderInline = (text) => {
-    // Split by patterns in priority order – includes links and strikethrough
     const parts = text.split(/(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$|```[\s\S]*?```|`[^`]+`|\*\*\*.*?\*\*\*|___.*?___|\[[^\]]*\]\([^)]*\)|~~[^~]+?~~|\*\*.*?\*\*|__.*?__|``.*?``|\*[^*\n]+?\*|_[^_\n]+?_)/g);
     return parts.map((part, i) => {
       if (!part) return null;
-      // Display math $$...$$
       if (part.startsWith("$$") && part.endsWith("$$") && part.length > 4) {
         return renderMath(part.slice(2, -2), true, i);
       }
-      // Inline math $...$  (only if it looks like LaTeX: contains \ ^ _ or {)
       if (part.startsWith("$") && part.endsWith("$") && !part.startsWith("$$") && part.length > 2) {
         const inner = part.slice(1, -1);
         if (/[\\^_{]/.test(inner)) return renderMath(inner, false, i);
       }
-      // Inline code
       const codeMatch = part.match(/^``(.+)``$/) || part.match(/^`(.+)`$/);
       if (codeMatch) {
         return <code key={i} className={`inline-block px-1.5 py-0.5 rounded text-xs font-mono ${dark ? "bg-gray-700 text-emerald-400" : "bg-gray-200 text-emerald-700"}`}>{codeMatch[1]}</code>;
       }
-      // Markdown link [text](url)
       const linkMatch = part.match(/^\[([^\]]*)\]\(([^)]*)\)$/);
       if (linkMatch) {
         return <a key={i} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className={`underline ${dark ? "text-indigo-400 hover:text-indigo-300" : "text-indigo-600 hover:text-indigo-500"}`}>{linkMatch[1]}</a>;
       }
-      // Strikethrough ~~text~~
       if (part.startsWith("~~") && part.endsWith("~~")) {
         return <s key={i} className={dark ? "text-gray-500" : "text-gray-400"}>{part.slice(2, -2)}</s>;
       }
-      // Bold italic ***text***
       if (part.startsWith("***") && part.endsWith("***")) {
         return <strong key={i} className={`italic ${dark ? "text-white" : "text-gray-900"}`}>{part.slice(3, -3)}</strong>;
       }
-      // Bold underline ___text___
       if (part.startsWith("___") && part.endsWith("___")) {
         return <strong key={i} className={`underline ${dark ? "text-white" : "text-gray-900"}`}>{part.slice(3, -3)}</strong>;
       }
-      // Bold **text** or __text__
       if ((part.startsWith("**") && part.endsWith("**")) || (part.startsWith("__") && part.endsWith("__"))) {
         return <strong key={i} className={dark ? "text-white" : "text-gray-900"}>{part.slice(2, -2)}</strong>;
       }
-      // Italic *text* or _text_
       if ((part.startsWith("*") && part.endsWith("*") && !part.startsWith("**")) ||
           (part.startsWith("_") && part.endsWith("_") && !part.startsWith("__"))) {
         return <em key={i} className={dark ? "text-gray-300 italic" : "text-gray-500 italic"}>{part.slice(1, -1)}</em>;
@@ -628,7 +754,6 @@ Sei motivierend und realistisch!`;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
 
-      // Code block start/end
       if (line.trim().startsWith("```")) {
         if (!inCodeBlock) {
           inCodeBlock = true;
@@ -650,7 +775,6 @@ Sei motivierend und realistisch!`;
       }
       if (inCodeBlock) { codeLines.push(line); continue; }
 
-      // Multi-line math block: line is exactly $$
       if (line.trim() === "$$") {
         if (!inMathBlock) { inMathBlock = true; mathLines = []; continue; }
         inMathBlock = false;
@@ -663,7 +787,6 @@ Sei motivierend und realistisch!`;
       }
       if (inMathBlock) { mathLines.push(line); continue; }
 
-      // Single-line display math  $$...$$
       if (line.trim().startsWith("$$") && line.trim().endsWith("$$") && line.trim().length > 4) {
         output.push(
           <div key={`math-${i}`} className={`my-3 rounded-xl p-3 overflow-x-auto ${dark ? "bg-gray-800/60 border border-gray-700" : "bg-gray-50 border border-gray-200"}`}>
@@ -673,22 +796,18 @@ Sei motivierend und realistisch!`;
         continue;
       }
 
-      // Horizontal rule ---
       if (/^---+$/.test(line.trim())) {
         output.push(<hr key={i} className={`my-4 border-0 h-0.5 rounded-full ${dark ? "bg-gray-700" : "bg-gray-200"}`} />);
         continue;
       }
 
-      // Table: lines starting and ending with |
       if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
-        // Collect all consecutive table lines
         let tableLines = [];
         let j = i;
         while (j < lines.length && lines[j].trim().startsWith("|") && lines[j].trim().endsWith("|")) {
           tableLines.push(lines[j]);
           j++;
         }
-        // Parse table
         const rows = tableLines.map((tl) => tl.split("|").map((c) => c.trim()).filter((c) => c !== ""));
         const separatorIdx = rows.findIndex((r) => r.every((c) => /^[-:]+$/.test(c)));
         const hasHeader = separatorIdx === 1;
@@ -698,7 +817,7 @@ Sei motivierend und realistisch!`;
             <table className={`w-full text-sm border-collapse rounded-lg overflow-hidden ${dark ? "border border-gray-600" : "border border-gray-200"}`}>
               <tbody>
                 {rows.map((row, ri) => {
-                  if (ri === separatorIdx) return null; // skip separator row
+                  if (ri === separatorIdx) return null;
                   const isHeader = hasHeader && ri === 0;
                   return (
                     <tr key={ri} className={isHeader ? (dark ? "bg-gray-700" : "bg-indigo-50") : (ri % 2 === 0 ? (dark ? "bg-gray-800" : "bg-white") : (dark ? "bg-gray-750" : "bg-gray-50"))}>
@@ -717,11 +836,10 @@ Sei motivierend und realistisch!`;
             </table>
           </div>
         );
-        i = j - 1; // skip consumed table lines
+        i = j - 1;
         continue;
       }
 
-      // Blockquote > ...
       if (line.startsWith("> ") || line === ">") {
         const qText = line.slice(line.startsWith("> ") ? 2 : 1);
         output.push(
@@ -732,7 +850,6 @@ Sei motivierend und realistisch!`;
         continue;
       }
 
-      // ### H3
       if (line.startsWith("### ")) {
         output.push(
           <h3 key={i} className={`text-base md:text-lg font-bold mt-4 mb-1.5 ${dark ? "text-purple-300" : "text-purple-700"}`}>{renderInline(line.slice(4))}</h3>
@@ -740,7 +857,6 @@ Sei motivierend und realistisch!`;
         continue;
       }
 
-      // ## H2
       if (line.startsWith("## ")) {
         output.push(
           <div key={i} className="mt-6 mb-2.5">
@@ -751,7 +867,6 @@ Sei motivierend und realistisch!`;
         continue;
       }
 
-      // # H1
       if (line.startsWith("# ")) {
         output.push(
           <h1 key={i} className="text-xl md:text-2xl font-extrabold mt-4 mb-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">{renderInline(line.slice(2))}</h1>
@@ -759,7 +874,6 @@ Sei motivierend und realistisch!`;
         continue;
       }
 
-      // Checkbox - [ ] or - [x]
       if (enableCheckboxes && /^- \[[ x]\]/.test(line)) {
         const content = line.replace(/^- \[[ x]\] /, "");
         const key = `t${taskI}`; taskI++;
@@ -778,7 +892,6 @@ Sei motivierend und realistisch!`;
         continue;
       }
 
-      // ☕ Pause line
       if (line.includes("☕") || (line.startsWith("- ") && /pause/i.test(line))) {
         output.push(
           <div key={i} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg my-1 ${dark ? "bg-amber-900/15" : "bg-amber-50"}`}>
@@ -789,7 +902,6 @@ Sei motivierend und realistisch!`;
         continue;
       }
 
-      // Bullet list - or •
       if (/^[-•]\s/.test(line)) {
         const c = line.replace(/^[-•]\s/, "");
         output.push(
@@ -800,7 +912,6 @@ Sei motivierend und realistisch!`;
         continue;
       }
 
-      // Numbered list
       if (/^\d+[.)]\s/.test(line)) {
         const c = line.replace(/^\d+[.)]\s/, "");
         output.push(
@@ -811,10 +922,8 @@ Sei motivierend und realistisch!`;
         continue;
       }
 
-      // Empty line
       if (!line.trim()) { output.push(<div key={i} className="h-2" />); continue; }
 
-      // Default paragraph
       output.push(
         <p key={i} className={`mb-2 text-sm md:text-base leading-relaxed ${dark ? "text-gray-300" : "text-gray-600"}`}>
           {renderInline(line)}
@@ -833,7 +942,6 @@ Sei motivierend und realistisch!`;
 
   const nextTest = tests.filter((t) => daysUntil(t.date) >= 0).sort((a, b) => daysUntil(a.date) - daysUntil(b.date))[0];
 
-
   // ===== AUTH SCREEN =====
   if (view === "auth") {
     return (
@@ -848,7 +956,6 @@ Sei motivierend und realistisch!`;
             {dark ? <Sun size={20} /> : <Moon size={20} />}
           </button>
 
-          {/* Logo */}
           <div className={`w-20 h-20 md:w-24 md:h-24 rounded-2xl flex items-center justify-center shadow-xl mb-6 ${dark ? "bg-gradient-to-br from-indigo-600 to-purple-700 shadow-purple-500/30" : "bg-gradient-to-br from-indigo-500 to-purple-600 shadow-purple-400/30"}`} style={{ animation: "float 3s ease-in-out infinite" }}>
             <Book size={36} className="text-white" />
           </div>
@@ -857,12 +964,9 @@ Sei motivierend und realistisch!`;
             {authMode === "signup" ? "Erstelle dein Konto und fange an zu lernen" : "Willkommen zurück – meld dich wieder ein"}
           </p>
 
-          {/* Card */}
           <div className={`w-full max-w-sm rounded-2xl shadow-xl overflow-hidden ${dark ? "bg-gray-800 border border-gray-700" : "bg-white border border-gray-100"}`}>
-            {/* Top color bar */}
             <div className="h-1.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
             <div className="p-6 md:p-7">
-              {/* Mode toggle */}
               <div className={`flex gap-1 p-1 rounded-xl mb-6 ${dark ? "bg-gray-700" : "bg-gray-100"}`}>
                 {["signup", "login"].map((m) => (
                   <button key={m} onClick={() => { setAuthMode(m); setAuthError(""); }} className={`flex-1 py-2.5 rounded-lg text-xs font-bold transition-all ${authMode === m ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-sm" : dark ? "text-gray-400 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>
@@ -871,7 +975,6 @@ Sei motivierend und realistisch!`;
                 ))}
               </div>
 
-              {/* Signup fields */}
               {authMode === "signup" && (
                 <div className="space-y-3.5">
                   <div>
@@ -898,7 +1001,6 @@ Sei motivierend und realistisch!`;
                 </div>
               )}
 
-              {/* Login fields */}
               {authMode === "login" && (
                 <div className="space-y-3.5">
                   <div>
@@ -917,14 +1019,12 @@ Sei motivierend und realistisch!`;
                 </div>
               )}
 
-              {/* Error */}
               {authError && (
                 <div className={`mt-4 px-3.5 py-2.5 rounded-xl text-xs font-semibold flex items-center gap-2 ${dark ? "bg-red-900/25 border border-red-800/50 text-red-400" : "bg-red-50 border border-red-200 text-red-600"}`}>
                   <AlertCircle size={14} className="flex-shrink-0" /> {authError}
                 </div>
               )}
 
-              {/* Submit button */}
               <button
                 onClick={authMode === "signup" ? handleSignup : handleLogin}
                 disabled={authValidating}
@@ -936,7 +1036,6 @@ Sei motivierend und realistisch!`;
                 }
               </button>
 
-              {/* Hint */}
               <p className={`text-center text-xs mt-4 ${dark ? "text-gray-500" : "text-gray-400"}`}>
                 {authMode === "signup"
                   ? <>Schon ein Konto? <button onClick={() => { setAuthMode("login"); setAuthError(""); }} className="text-indigo-500 hover:text-indigo-400 font-semibold">Hier einloggen</button></>
@@ -949,8 +1048,8 @@ Sei motivierend und realistisch!`;
         <style>{`
           * { box-sizing: border-box; }
           html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; overflow-x: hidden; }
-
-          @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-12px)} }
+          
+@keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-12px)} }
           @keyframes blob1 { 0%,100%{transform:scale(1) translate(0,0)} 50%{transform:scale(1.15) translate(20px,30px)} }
           @keyframes blob2 { 0%,100%{transform:scale(1) translate(0,0)} 50%{transform:scale(1.2) translate(-30px,20px)} }
           @keyframes blob3 { 0%,100%{transform:scale(1) translate(0,0)} 50%{transform:scale(1.1) translate(25px,-20px)} }
@@ -1002,7 +1101,7 @@ Sei motivierend und realistisch!`;
         <style>{`
           * { box-sizing: border-box; }
           html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; overflow-x: hidden; }
-
+          
           @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-14px)} }
           @keyframes blob1 { 0%,100%{transform:scale(1) translate(0,0)} 50%{transform:scale(1.15) translate(20px,30px)} }
           @keyframes blob2 { 0%,100%{transform:scale(1) translate(0,0)} 50%{transform:scale(1.2) translate(-30px,20px)} }
@@ -1297,11 +1396,9 @@ Sei motivierend und realistisch!`;
                 <div className={`rounded-2xl overflow-hidden shadow-lg ${dark ? "border border-gray-700" : ""}`}>
                   <div className="h-2 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
                   <div className={`p-5 md:p-7 relative ${dark ? "bg-gray-800" : "bg-amber-50"}`}>
-                    {/* Notebook lines */}
                     {!dark && (
                       <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: "repeating-linear-gradient(transparent, transparent 31px, #e5ddd0 31px, #e5ddd0 32px)", backgroundPosition: "0 32px" }} />
                     )}
-                    {/* Red margin line */}
                     {!dark && <div className="absolute top-0 bottom-0 left-12 w-0.5 bg-red-300 opacity-50 pointer-events-none" />}
 
                     <div className="relative z-10">
@@ -1338,7 +1435,6 @@ Sei motivierend und realistisch!`;
                     </div>
                   </div>
 
-                  {/* Mode Toggle */}
                   <div className={`flex gap-1.5 p-1 rounded-lg mb-4 ${dark ? "bg-gray-700" : "bg-gray-100"}`}>
                     <button onClick={() => { setHeftMode("thema"); setHeftPdfs([]); }} className={`flex-1 py-2 rounded-md text-xs font-bold transition-all ${heftMode === "thema" ? "bg-emerald-600 text-white shadow-sm" : dark ? "text-gray-300 hover:text-white" : "text-gray-500 hover:text-gray-700"}`}>
                       📚 Thema eingeben
@@ -1364,7 +1460,6 @@ Sei motivierend und realistisch!`;
                   {heftMode === "pdf" && (
                     <div>
                       <input ref={fileRef} type="file" accept=".pdf" multiple className="hidden" onChange={(e) => { handleFiles(e.target.files); e.target.value = ""; }} />
-                      {/* Drop zone – always visible so you can keep adding */}
                       <div
                         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                         onDragLeave={() => setDragOver(false)}
@@ -1385,7 +1480,6 @@ Sei motivierend und realistisch!`;
                         <p className={`text-xs mt-0.5 ${dark ? "text-gray-500" : "text-gray-400"}`}>Mehrere Dateien erlaubt</p>
                       </div>
 
-                      {/* List of added PDFs */}
                       {heftPdfs.length > 0 && (
                         <div className="mt-2.5 space-y-1.5">
                           {heftPdfs.map((pdf, idx) => (
@@ -1412,7 +1506,6 @@ Sei motivierend und realistisch!`;
                   </button>
                 </Card>
 
-                {/* Entry List */}
                 {heftEntries.length > 0 && (
                   <div>
                     <h3 className={`text-xs md:text-sm font-extrabold mb-2.5 uppercase tracking-wider ${dark ? "text-gray-400" : "text-gray-500"}`}>📓 Deine Einträge</h3>
@@ -1479,84 +1572,80 @@ Sei motivierend und realistisch!`;
                   </div>
                 </div>
 
-                {/* Flip Card */}
-                <div className="flex justify-center mb-5" style={{ perspective: "1200px" }}>
-                  <div
-                    onClick={() => setFlashFlipped(!flashFlipped)}
-                    className="w-full max-w-lg cursor-pointer"
-                    style={{ transformStyle: "preserve-3d", transition: "transform 0.5s cubic-bezier(0.4,0.2,0.2,1)", transform: flashFlipped ? "rotateY(180deg)" : "rotateY(0deg)", minHeight: "260px" }}
-                  >
-                    {/* Front */}
-                    <div
-                      className={`absolute inset-0 rounded-2xl p-6 md:p-8 flex flex-col justify-between shadow-lg border ${dark ? "bg-gray-800 border-gray-700" : "bg-white border-gray-200"}`}
-                      style={{ backfaceVisibility: "hidden" }}
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${dark ? "bg-pink-900/50 text-pink-300" : "bg-pink-100 text-pink-700"}`}>❓ Frage</span>
-                        <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>Klick zum Umdrehen</span>
-                      </div>
-                      <div className="flex-1 flex items-center justify-center py-4">
-                        <p className={`text-center text-base md:text-lg font-semibold leading-relaxed ${dark ? "text-white" : "text-gray-900"}`}>
-                          {activeFlashSet.cards[flashCardIdx]?.front}
-                        </p>
-                      </div>
-                      <div className="flex justify-center">
-                        <div className={`w-12 h-1 rounded-full ${dark ? "bg-gray-700" : "bg-gray-200"}`} />
-                      </div>
-                    </div>
-
-                    {/* Back */}
-                    <div
-                      className={`absolute inset-0 rounded-2xl p-6 md:p-8 flex flex-col justify-between shadow-lg border ${dark ? "bg-gradient-to-br from-pink-900/30 to-rose-900/30 border-pink-800" : "bg-gradient-to-br from-pink-50 to-rose-50 border-pink-200"}`}
-                      style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}
-                    >
-                      <div className="flex justify-between items-center">
-                        <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${dark ? "bg-emerald-900/50 text-emerald-300" : "bg-emerald-100 text-emerald-700"}`}>✅ Antwort</span>
-                        <span className={`text-xs ${dark ? "text-gray-500" : "text-gray-400"}`}>Klick zum Umdrehen</span>
-                      </div>
-                      <div className="flex-1 flex items-center justify-center py-4">
-                        <p className={`text-center text-sm md:text-base leading-relaxed ${dark ? "text-gray-200" : "text-gray-700"}`}>
-                          {activeFlashSet.cards[flashCardIdx]?.back}
-                        </p>
-                      </div>
-                      <div className="flex justify-center">
-                        <div className={`w-12 h-1 rounded-full ${dark ? "bg-pink-800" : "bg-pink-200"}`} />
-                      </div>
-                    </div>
+                {/* Card */}
+                <div className={`rounded-2xl p-5 md:p-6 mb-4 ${dark ? "bg-gray-800 border border-gray-700" : "bg-white border border-gray-200 shadow-sm"}`}>
+                  {/* Question */}
+                  <div className="mb-4">
+                    <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${dark ? "bg-pink-900/50 text-pink-300" : "bg-pink-100 text-pink-700"}`}>❓ Frage</span>
+                    <p className={`mt-3 text-base md:text-lg font-semibold leading-relaxed ${dark ? "text-white" : "text-gray-900"}`}>
+                      {activeFlashSet.cards[flashCardIdx]?.front}
+                    </p>
                   </div>
+
+                  {/* Answer Input */}
+                  {!flashAnswerState && (
+                    <div className="space-y-2">
+                      <label className={`text-xs font-semibold ${dark ? "text-gray-400" : "text-gray-500"}`}>Deine Antwort:</label>
+                      <input
+                        autoFocus
+                        value={flashUserAnswer}
+                        onChange={(e) => setFlashUserAnswer(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && checkAnswer()}
+                        placeholder="Schreibe deine Antwort..."
+                        className={`w-full px-3.5 py-2.5 rounded-lg text-sm border focus:outline-none focus:ring-2 focus:ring-pink-500 ${dark ? "bg-gray-700 border-gray-600 text-white placeholder-gray-500" : "bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400"}`}
+                      />
+                      <button onClick={checkAnswer} className="w-full py-2.5 rounded-lg font-bold text-sm bg-gradient-to-r from-pink-600 to-rose-600 text-white hover:scale-[1.02] transition-all shadow-sm">
+                        Antwort prüfen
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Result */}
+                  {flashAnswerState && (
+                    <div className={`rounded-xl p-4 border-2 ${flashAnswerState === "correct" ? (dark ? "bg-emerald-900/20 border-emerald-600" : "bg-emerald-50 border-emerald-400") : (dark ? "bg-red-900/20 border-red-600" : "bg-red-50 border-red-400")}`}>
+                      <div className="flex items-center gap-2 mb-2">
+                        {flashAnswerState === "correct" ? (
+                          <><Check size={18} className="text-emerald-500" /> <span className={`font-bold text-sm ${dark ? "text-emerald-400" : "text-emerald-700"}`}>✅ Richtig!</span></>
+                        ) : (
+                          <><X size={18} className="text-red-500" /> <span className={`font-bold text-sm ${dark ? "text-red-400" : "text-red-700"}`}>❌ Nicht ganz</span></>
+                        )}
+                      </div>
+                      {flashAnswerState === "wrong" && (
+                        <>
+                          <p className={`text-xs font-semibold mb-1 ${dark ? "text-gray-400" : "text-gray-600"}`}>Richtige Antwort:</p>
+                          <p className={`text-sm leading-relaxed ${dark ? "text-gray-200" : "text-gray-800"}`}>
+                            {activeFlashSet.cards[flashCardIdx]?.back}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Navigation */}
-                <div className="flex justify-center items-center gap-3 mb-4">
-                  <button
-                    onClick={() => { if (flashCardIdx > 0) { setFlashCardIdx(flashCardIdx - 1); setFlashFlipped(false); } }}
-                    disabled={flashCardIdx === 0}
-                    className={`px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm transition-all flex items-center gap-2 ${flashCardIdx === 0 ? "opacity-30 cursor-not-allowed" : "hover:scale-105"} ${dark ? "bg-gray-800 text-white border border-gray-700" : "bg-white text-gray-700 border border-gray-200 shadow-sm"}`}
-                  >
-                    <ArrowLeft size={15} /> Vorher
-                  </button>
-
+                <div className="flex justify-center items-center gap-3">
                   {flashCardIdx === activeFlashSet.cards.length - 1 ? (
                     <button
-                      onClick={() => { setFlashCardIdx(0); setFlashFlipped(false); }}
+                      onClick={() => { setFlashCardIdx(0); setFlashFlipped(false); setFlashUserAnswer(""); setFlashAnswerState(null); }}
                       className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2"
                     >
                       <RotateCcw size={15} /> Neu anfangen
                     </button>
                   ) : (
                     <button
-                      onClick={() => { setFlashCardIdx(flashCardIdx + 1); setFlashFlipped(false); }}
-                      className="px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm bg-gradient-to-r from-pink-500 to-rose-500 text-white shadow-md hover:scale-105 transition-all flex items-center gap-2"
+                      onClick={nextFlashCard}
+                      disabled={!flashAnswerState}
+                      className={`px-5 py-2.5 rounded-xl font-bold text-xs md:text-sm shadow-md transition-all flex items-center gap-2 ${!flashAnswerState ? "bg-gray-400 text-gray-200 cursor-not-allowed" : "bg-gradient-to-r from-pink-500 to-rose-500 text-white hover:scale-105"}`}
                     >
-                      Nächste <ChevronRight size={15} />
+                      Nächste Karte <ChevronRight size={15} />
                     </button>
                   )}
                 </div>
 
                 {/* Card dots */}
-                <div className="flex justify-center gap-1.5 flex-wrap max-w-md mx-auto">
+                <div className="flex justify-center gap-1.5 flex-wrap max-w-md mx-auto mt-4">
                   {activeFlashSet.cards.map((_, i) => (
-                    <button key={i} onClick={() => { setFlashCardIdx(i); setFlashFlipped(false); }} className={`rounded-full transition-all ${i === flashCardIdx ? "w-4 h-2.5 bg-pink-500" : i < flashCardIdx ? `h-2.5 w-2.5 ${dark ? "bg-pink-800" : "bg-pink-300"}` : `h-2.5 w-2.5 ${dark ? "bg-gray-700" : "bg-gray-300"}`}`} />
+                    <button key={i} onClick={() => { setFlashCardIdx(i); setFlashFlipped(false); setFlashUserAnswer(""); setFlashAnswerState(null); }} className={`rounded-full transition-all ${i === flashCardIdx ? "w-4 h-2.5 bg-pink-500" : i < flashCardIdx ? `h-2.5 w-2.5 ${dark ? "bg-pink-800" : "bg-pink-300"}` : `h-2.5 w-2.5 ${dark ? "bg-gray-700" : "bg-gray-300"}`}`} />
                   ))}
                 </div>
               </div>
@@ -1696,7 +1785,7 @@ Sei motivierend und realistisch!`;
                     <h3 className={`text-xs md:text-sm font-extrabold mb-2.5 uppercase tracking-wider ${dark ? "text-gray-400" : "text-gray-500"}`}>🃏 Deine Lernkarten-Sets</h3>
                     <div className="space-y-2">
                       {flashSets.map((set) => (
-                        <button key={set.id} onClick={() => { setActiveFlashSet(set); setFlashCardIdx(0); setFlashFlipped(false); setView("flash-card"); }} className={`group w-full text-left p-3 md:p-4 rounded-xl border transition-all hover:scale-[1.02] ${dark ? "bg-gray-800 border-gray-700 hover:border-pink-600" : "bg-white border-gray-200 hover:border-pink-300 shadow-sm"}`}>
+                        <button key={set.id} onClick={() => { setActiveFlashSet(set); setFlashCardIdx(0); setFlashFlipped(false); setFlashUserAnswer(""); setFlashAnswerState(null); setView("flash-card"); }} className={`group w-full text-left p-3 md:p-4 rounded-xl border transition-all hover:scale-[1.02] ${dark ? "bg-gray-800 border-gray-700 hover:border-pink-600" : "bg-white border-gray-200 hover:border-pink-300 shadow-sm"}`}>
                           <div className="flex justify-between items-center">
                             <div className="min-w-0">
                               <div className="flex items-center gap-2 mb-0.5">
@@ -1722,9 +1811,9 @@ Sei motivierend und realistisch!`;
 
       </div>
       <style>{`
-          * { box-sizing: border-box; }
-          html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; overflow-x: hidden; }
-        `}</style>
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; width: 100%; min-height: 100%; overflow-x: hidden; }
+      `}</style>
     </div>
   );
 }
