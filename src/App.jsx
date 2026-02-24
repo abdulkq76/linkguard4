@@ -306,47 +306,43 @@ export default function StudyFlow() {
 
   // Fallback API mit Retry-Mechanismus
   const fetchAI = async (prompt, parts = null) => {
-    const apis = [
-      { url: "https://api.bennokahmann.me/ai/google/jill/", name: "Google" },
-      { url: "https://api.bennokahmann.me/ai/nvidia/jill/", name: "NVIDIA" }
-    ];
+  let userContent;
 
-    for (const api of apis) {
-      try {
-        console.log(`🔄 Versuche ${api.name} API...`);
-        const body = parts 
-          ? { contents: [{ parts }] }
-          : { contents: [{ parts: [{ text: prompt }] }] };
-        
-        const r = await fetchWithRetry(api.url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }, 2); // Nur 2 Versuche pro API
-
-        if (!r.ok) {
-          console.log(`❌ ${api.name} API Fehler ${r.status}`);
-          continue;
-        }
-
-        const data = await r.json();
-        const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
-        
-        if (!text.trim()) {
-          console.log(`⚠️ ${api.name} API: Leere Antwort`);
-          continue;
-        }
-
-        console.log(`✅ ${api.name} API erfolgreich`);
-        return text;
-      } catch (e) {
-        console.log(`❌ ${api.name} API Fehler:`, e.message);
-        continue;
+  if (parts) {
+    userContent = parts.map(p => {
+      if (p.inlineData) {
+        return {
+          type: "document",
+          source: { type: "base64", media_type: p.inlineData.mimeType, data: p.inlineData.data }
+        };
       }
-    }
+      return { type: "text", text: p.text };
+    });
+  } else {
+    userContent = [{ type: "text", text: prompt }];
+  }
 
-    throw new Error("Alle APIs sind derzeit nicht erreichbar. Bitte versuche es später erneut.");
-  };
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1000,
+      messages: [{ role: "user", content: userContent }]
+    })
+  });
+
+  if (!response.ok) throw new Error(`API Fehler ${response.status}`);
+  
+  const data = await response.json();
+  const text = data.content
+    ?.map(b => b.type === "text" ? b.text : "")
+    .filter(Boolean)
+    .join("") || "";
+  
+  if (!text.trim()) throw new Error("Keine Antwort erhalten.");
+  return text;
+};
 
   const generate = async () => {
     setLoading(true);
